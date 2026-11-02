@@ -1,0 +1,41 @@
+name: claude-review
+
+on:
+  pull_request:
+    types: [opened, ready_for_review, synchronize, reopened]
+
+concurrency:
+  group: claude-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  review:
+    # skip drafts; skip forks (no access to secrets)
+    if: github.event.pull_request.draft == false && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+      - uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          prompt: |
+            REPO: ${{ github.repository }}
+            PR NUMBER: ${{ github.event.pull_request.number }}
+
+            Review this pull request. First read AGENTS.md (the project's hard rules) and the linked issue's acceptance criteria.
+            Check, in this order:
+            1. Does the diff meet the issue's acceptance criteria, and are they covered by tests in this PR?
+            2. Violations of AGENTS.md hard rules: ORM or non-PostgreSQL storage, f-string SQL, SQL now() instead of the Clock, approval as a flag instead of interrupt(), LLM called outside LLMPort, tests needing an API key, missing timeouts, secrets in code.
+            3. Correctness, race conditions, error handling.
+            4. PR title must be `CFD-xx: <title>`.
+            Do not nitpick formatting (ruff handles it). Post inline comments for specific problems and ONE short summary comment with a verdict. Keep it concise.
+          claude_args: |
+            --allowedTools "mcp__github_inline_comment__create_inline_comment,Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*),Read,Grep,Glob"
