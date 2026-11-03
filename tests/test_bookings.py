@@ -1,6 +1,7 @@
 """Real bookings access for the approval nodes (CFD-14 wiring): find a patient's confirmed
 bookings and cancel one safely, on a freshly seeded real PostgreSQL with a fixed clock."""
 
+import logging
 from collections.abc import Iterator
 from datetime import UTC, date, datetime
 from uuid import UUID, uuid4
@@ -246,3 +247,38 @@ def test_the_constraint_is_added_to_a_database_created_before_it_existed(env: En
     assert exists is not None
     with pytest.raises(psycopg.errors.ForeignKeyViolation):
         _insert_approval(env.url, env.conversation(), 999_999)
+
+
+def test_cancel_logs_when_nothing_was_cancelled(env: Env, caplog: pytest.LogCaptureFixture) -> None:
+    booking_id, _ = env.book(TOMORROW, status="pending_approval")
+
+    with caplog.at_level(logging.WARNING):
+        env.bookings.cancel(booking_id)
+
+    [record] = [r for r in caplog.records if r.getMessage() == "booking.cancel_not_applied"]
+    assert record.__dict__["fields"] == {"booking_id": booking_id}
+
+
+def test_cancel_logs_nothing_when_it_cancelled(env: Env, caplog: pytest.LogCaptureFixture) -> None:
+    booking_id, _ = env.book(TOMORROW)
+
+    with caplog.at_level(logging.WARNING):
+        env.bookings.cancel(booking_id)
+
+    assert [r for r in caplog.records if r.getMessage() == "booking.cancel_not_applied"] == []
+
+
+def test_the_constraint_guard_looks_at_the_approvals_table_only(env: Env) -> None:
+    """A same-named constraint on another table must not make the upgrade skip silently."""
+    with psycopg.connect(env.url, autocommit=True) as conn:
+        conn.execute("ALTER TABLE approvals DROP CONSTRAINT approvals_booking_id_fkey")
+        conn.execute("CREATE TABLE decoy (booking_id bigint)")
+        conn.execute("ALTER TABLE decoy ADD CONSTRAINT approvals_booking_id_fkey CHECK (true)")
+
+        apply_schema(conn)
+
+        exists = conn.execute(
+            "SELECT 1 FROM pg_constraint WHERE conname = 'approvals_booking_id_fkey'"
+            " AND conrelid = 'approvals'::regclass"
+        ).fetchone()
+    assert exists is not None

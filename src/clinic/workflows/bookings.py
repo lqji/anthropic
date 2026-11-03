@@ -1,5 +1,6 @@
 """The real `BookingPort` for the approval nodes: bookings in PostgreSQL."""
 
+import logging
 from datetime import date
 from zoneinfo import ZoneInfo
 
@@ -10,6 +11,8 @@ from clinic.domain.schedule import day_bounds
 from clinic.repositories import bookings
 from clinic.repositories.bookings import ConfirmedBooking
 from clinic.workflows.approval import BookingRef
+
+logger = logging.getLogger("clinic.bookings")
 
 
 class PostgresBookings:
@@ -30,7 +33,13 @@ class PostgresBookings:
 
     def cancel(self, booking_id: int) -> None:
         with self._pool.connection() as conn:
-            bookings.cancel(conn, booking_id, self._clock.now())
+            cancelled = bookings.cancel(conn, booking_id, self._clock.now())
+        if not cancelled:
+            # Expected after a crash (the decision is applied twice), so the patient is still told
+            # "cancelled"; but a booking that was never `confirmed` should be visible in the logs.
+            logger.warning(
+                "booking.cancel_not_applied", extra={"fields": {"booking_id": booking_id}}
+            )
 
     def _label(self, booking: ConfirmedBooking) -> str:
         local = booking.starts_at.astimezone(ZoneInfo(self._timezone))

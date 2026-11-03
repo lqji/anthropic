@@ -31,7 +31,10 @@ CREATE INDEX IF NOT EXISTS approvals_unresumed_idx
 -- an old row that points at no booking cannot stop the api from starting.
 DO $$
 BEGIN
-    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'approvals_booking_id_fkey') THEN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conname = 'approvals_booking_id_fkey' AND conrelid = 'approvals'::regclass
+    ) THEN
         ALTER TABLE approvals
             ADD CONSTRAINT approvals_booking_id_fkey
             FOREIGN KEY (booking_id) REFERENCES bookings (id) NOT VALID;
