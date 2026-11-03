@@ -253,6 +253,7 @@ dependencies = [
 [package.dev-dependencies]
 dev = [
     { name = "httpx" },
+    { name = "httpx2" },
     { name = "mypy" },
     { name = "pytest" },
     { name = "pytest-cov" },
@@ -275,6 +276,7 @@ requires-dist = [
 [package.metadata.requires-dev]
 dev = [
     { name = "httpx" },
+    { name = "httpx2", specifier = ">=2.16.0" },
     { name = "mypy" },
     { name = "pytest" },
     { name = "pytest-cov" },

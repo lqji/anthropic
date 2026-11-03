@@ -14,6 +14,7 @@ from clinic.config import Settings
 from clinic.db import CONNECT_TIMEOUT_S, make_checkpoint_pool, make_pool
 from clinic.deps import Deps
 from clinic.errors import install_error_handlers
+from clinic.llm import make_llm
 from clinic.locks import ConversationLocks
 from clinic.observability import configure_logging, install_request_logging
 from clinic.schema import apply_schema
@@ -87,6 +88,7 @@ def create_app(settings: Settings) -> FastAPI:
             pool=pool,
             clock=SystemClock(),
             locks=ConversationLocks(),
+            llm=make_llm(settings),
             graph=build_graph(settings, PostgresSaver(checkpoint_pool)),
         )
         try:

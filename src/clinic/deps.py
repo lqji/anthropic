@@ -4,6 +4,7 @@ from psycopg_pool import ConnectionPool
 
 from clinic.clock import Clock
 from clinic.config import Settings
+from clinic.llm import LLMPort
 from clinic.locks import ConversationLocks
 from clinic.workflows.graph import ConversationGraph
 
@@ -16,4 +17,5 @@ class Deps:
     pool: ConnectionPool
     clock: Clock
     locks: ConversationLocks
+    llm: LLMPort
     graph: ConversationGraph
