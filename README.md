@@ -114,6 +114,10 @@ The emergency check is left out by default, because it leaves a flag in the staf
 endpoint can close. On a demo or staging system add it with `RUN_EMERGENCY=1 scripts/smoke_test.sh`
 (the flag text starts with "SMOKE TEST" so staff can tell it apart).
 
+If your `.env` was copied from an older `.env.example`, it may still contain an `APP_VERSION=` line.
+That value would override the version of the code in `/health`. Remove it once:
+`sed -i '/^APP_VERSION=/d' .env`.
+
 `<version>` is the tag without the leading `v` (tag `v0.1.0` is version `0.1.0`). It only names the
 image (`clinic-api:0.1.0`), so that two releases can sit side by side for a rollback. `/health`
 reports the version of the code you built, so check it after a deploy: it should match the tag.
