@@ -22,6 +22,7 @@ from clinic.errors import install_error_handlers
 from clinic.llm import make_llm
 from clinic.locks import ConversationLocks
 from clinic.observability import configure_logging, install_request_logging
+from clinic.rag.loader import KnowledgeLoader
 from clinic.schema import apply_schema
 from clinic.seed import seed_appointments
 from clinic.workflows.checkpointer import setup_checkpointer
@@ -48,7 +49,8 @@ def is_unreachable(exc: psycopg.OperationalError) -> bool:
 
 
 def prepare_database(settings: Settings, clock: Clock) -> bool:
-    """Create the app tables, seed the demo slots on first start, set up checkpointing.
+    """Create the app tables, load the clinic documents, seed the demo slots on first start and
+    set up checkpointing.
 
     True when done. Every step is idempotent, so they run on every start. An unreachable database
     is logged and gives False, so the api still starts and /health can report it; any other error
@@ -61,6 +63,7 @@ def prepare_database(settings: Settings, clock: Clock) -> bool:
             options=f"-c statement_timeout={SETUP_STATEMENT_TIMEOUT_MS}",
         ) as conn:
             apply_schema(conn)
+            KnowledgeLoader(settings.clinic_docs_dir).load(conn)
             seed_appointments(conn, settings.clinic_timezone, clock.now())
         setup_checkpointer(settings.database_url)
     except psycopg.OperationalError as exc:
@@ -72,7 +75,7 @@ def prepare_database(settings: Settings, clock: Clock) -> bool:
                 "fields": {
                     "error": type(exc).__name__,
                     "detail": str(exc).strip(),
-                    "step": "schema_and_checkpointer",
+                    "step": "schema_documents_and_checkpointer",
                 }
             },
         )
@@ -107,33 +110,36 @@ def create_app(settings: Settings, *, clock: Clock | None = None) -> FastAPI:
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         stop_retry = threading.Event()
         retry: threading.Thread | None = None
-        if not prepare_database(settings, app_clock):
-            # The database may come up after the api: keep trying in the background.
-            retry = threading.Thread(
-                target=keep_preparing,
-                args=(settings, app_clock, stop_retry),
-                name="prepare-database",
-                daemon=True,
-            )
-            retry.start()
         pool = make_pool(settings)
         checkpoint_pool = make_checkpoint_pool(settings)
-        # Do not wait for the first connection: /health must be able to report a down database.
-        pool.open(wait=False)
-        checkpoint_pool.open(wait=False)
-        app.state.deps = Deps(
-            settings=settings,
-            pool=pool,
-            clock=app_clock,
-            locks=ConversationLocks(),
-            llm=make_llm(settings),
-            graph=build_graph(
-                settings,
-                PostgresSaver(checkpoint_pool),
-                WorkflowDeps(settings=settings, pool=pool, clock=app_clock),
-            ),
-        )
+        # Everything below is inside the try, so a startup error (a missing docs directory, a
+        # graph that cannot be built, ...) still stops the retry thread and closes both pools
+        # instead of leaking their worker threads.
         try:
+            if not prepare_database(settings, app_clock):
+                # The database may come up after the api: keep trying in the background.
+                retry = threading.Thread(
+                    target=keep_preparing,
+                    args=(settings, app_clock, stop_retry),
+                    name="prepare-database",
+                    daemon=True,
+                )
+                retry.start()
+            # Do not wait for the first connection: /health must be able to report a down database.
+            pool.open(wait=False)
+            checkpoint_pool.open(wait=False)
+            app.state.deps = Deps(
+                settings=settings,
+                pool=pool,
+                clock=app_clock,
+                locks=ConversationLocks(),
+                llm=make_llm(settings),
+                graph=build_graph(
+                    settings,
+                    PostgresSaver(checkpoint_pool),
+                    WorkflowDeps(settings=settings, pool=pool, clock=app_clock),
+                ),
+            )
             yield
         finally:
             stop_retry.set()
