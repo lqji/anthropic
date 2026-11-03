@@ -18,6 +18,7 @@ from psycopg.rows import TupleRow
 
 from clinic import app as app_module
 from clinic.app import create_app, keep_preparing
+from clinic.clock import Clock, SystemClock
 from clinic.config import Settings
 from clinic.db import make_checkpoint_pool
 from clinic.workflows.checkpointer import setup_checkpointer
@@ -228,7 +229,7 @@ def test_retry_stops_on_an_error_that_will_not_fix_itself(
 ) -> None:
     calls: list[Settings] = []
 
-    def broken_prepare(settings: Settings) -> bool:
+    def broken_prepare(settings: Settings, clock: Clock) -> bool:
         calls.append(settings)
         raise ValueError("bad migration")
 
@@ -236,7 +237,9 @@ def test_retry_stops_on_an_error_that_will_not_fix_itself(
     monkeypatch.setattr(app_module, "prepare_database", broken_prepare)
 
     with caplog.at_level(logging.ERROR, logger="clinic.startup"):
-        keep_preparing(make_settings(), threading.Event())  # returns instead of looping
+        keep_preparing(
+            make_settings(), SystemClock(), threading.Event()
+        )  # returns instead of looping
 
     assert len(calls) == 1
     assert _logged(caplog, "startup.database_prepare_failed")
@@ -269,7 +272,7 @@ def test_a_timed_out_migration_stops_startup_instead_of_being_retried(
 
     with caplog.at_level(logging.ERROR, logger="clinic.startup"):
         with pytest.raises(psycopg.errors.QueryCanceled):
-            app_module.prepare_database(settings)
+            app_module.prepare_database(settings, SystemClock())
 
     assert not _logged(caplog, "startup.database_unavailable")
 
@@ -291,7 +294,7 @@ def test_setup_connections_use_the_long_statement_timeout(
     monkeypatch.setattr(app_module, "apply_schema", schema_spy)
     monkeypatch.setattr(PostgresSaver, "setup", setup_spy)
 
-    assert app_module.prepare_database(settings) is True
+    assert app_module.prepare_database(settings, SystemClock()) is True
     assert timeouts == {"schema": "5min", "checkpointer": "5min"}  # not the 5 s request timeout
 
 

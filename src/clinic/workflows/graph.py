@@ -7,7 +7,8 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 
 from clinic.config import Settings
-from clinic.workflows.nodes import NODES
+from clinic.workflows.deps import WorkflowDeps
+from clinic.workflows.nodes import NODES, wired_nodes
 from clinic.workflows.routing import INTENT_ROUTES, START_ROUTES, route_intent, route_start
 from clinic.workflows.state import ConversationState
 
@@ -32,11 +33,20 @@ _EDGES: tuple[tuple[str, str], ...] = (
 
 
 def build_graph(
-    settings: Settings, checkpointer: BaseCheckpointSaver[str] | None
+    settings: Settings,
+    checkpointer: BaseCheckpointSaver[str] | None,
+    deps: WorkflowDeps | None = None,
 ) -> ConversationGraph:
-    """Compile the graph. Pass a PostgresSaver; `None` is only for routing-only unit tests."""
+    """Compile the graph. Pass a PostgresSaver; `None` is only for routing-only unit tests.
+
+    With `deps`, nodes that need the database (e.g. `find_slots`) are the real ones; without
+    them every node is its stub.
+    """
+    nodes = dict(NODES)
+    if deps is not None:
+        nodes.update(wired_nodes(deps))
     builder = StateGraph(ConversationState)
-    for name, node in NODES.items():
+    for name, node in nodes.items():
         builder.add_node(name, node)
     builder.add_conditional_edges(START, route_start, list(START_ROUTES))
     builder.add_conditional_edges(
