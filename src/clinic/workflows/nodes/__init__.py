@@ -4,7 +4,13 @@ from typing import Final
 
 from clinic.workflows.deps import WorkflowDeps
 from clinic.workflows.nodes._types import Node
-from clinic.workflows.nodes.appointments import book, confirm_booking, find_slots, make_find_slots
+from clinic.workflows.nodes.appointments import (
+    book,
+    confirm_booking,
+    find_slots,
+    make_book,
+    make_find_slots,
+)
 from clinic.workflows.nodes.approvals import (
     apply_decision,
     await_approval,
@@ -39,4 +45,5 @@ def wired_nodes(deps: WorkflowDeps) -> dict[str, Node]:
         "classify": make_classify(deps),
         "knowledge": make_knowledge(deps),
         "find_slots": make_find_slots(deps),
+        "book": make_book(deps),
     }

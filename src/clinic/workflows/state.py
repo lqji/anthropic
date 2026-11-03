@@ -42,6 +42,9 @@ class ConversationState(TypedDict, total=False):
     sources: list[dict[str, str]]  # {"document": ..., "heading": ...} (CFD-11)
     # Slots last shown to the patient, kept across turns for "book the first one" (CFD-12/13).
     offered_slots: list[dict[str, str | int]]
+    # Booking made this turn by `book`, for `confirm_booking` (CFD-13):
+    # {"booking_id", "doctor", "starts_at"}. Empty when this turn booked nothing.
+    booking: dict[str, str | int]
     approval_id: int  # pending staff approval (CFD-14)
     status: str  # conversation status after the turn: active | awaiting_approval | closed
 
@@ -71,4 +74,5 @@ def new_turn(text: str, turn_id: str) -> ConversationState:
         "reply": "",
         "outcome": "",
         "sources": [],
+        "booking": {},
     }
