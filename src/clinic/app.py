@@ -73,18 +73,20 @@ def create_app(settings: Settings) -> FastAPI:
         pool.open(wait=False)
         stop_retry = threading.Event()
         retry: threading.Thread | None = None
-        if not prepare_database(pool, settings):
-            retry = threading.Thread(
-                target=keep_preparing,
-                args=(pool, settings, stop_retry),
-                name="prepare-database",
-                daemon=True,
-            )
-            retry.start()
-        app.state.deps = Deps(
-            settings=settings, pool=pool, clock=SystemClock(), locks=ConversationLocks()
-        )
+        # Everything after the pool is opened is inside the try, so a startup error (for example
+        # a missing docs directory) still closes the pool instead of leaking its worker threads.
         try:
+            if not prepare_database(pool, settings):
+                retry = threading.Thread(
+                    target=keep_preparing,
+                    args=(pool, settings, stop_retry),
+                    name="prepare-database",
+                    daemon=True,
+                )
+                retry.start()
+            app.state.deps = Deps(
+                settings=settings, pool=pool, clock=SystemClock(), locks=ConversationLocks()
+            )
             yield
         finally:
             stop_retry.set()

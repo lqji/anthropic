@@ -8,8 +8,10 @@ import pytest
 from fastapi.testclient import TestClient
 from psycopg import Connection
 from psycopg.rows import TupleRow
+from psycopg_pool import ConnectionPool
 
 from clinic import app as app_module
+from clinic import db as db_module
 from clinic.app import create_app
 from clinic.config import Settings
 from clinic.schema import apply_schema, schema_files
@@ -145,3 +147,28 @@ def test_missing_documents_directory_stops_startup(
     with pytest.raises(FileNotFoundError, match="missing"):
         with TestClient(create_app(settings)):
             pass
+
+
+def test_pool_is_closed_when_startup_fails(
+    make_settings: Callable[..., Settings],
+    database_url: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pools: list[ConnectionPool] = []
+    real_make_pool = db_module.make_pool
+
+    def recording_make_pool(settings: Settings) -> ConnectionPool:
+        pool = real_make_pool(settings)
+        pools.append(pool)
+        return pool
+
+    monkeypatch.setattr(app_module, "make_pool", recording_make_pool)  # the name app.py uses
+    settings = make_settings(database_url=database_url, clinic_docs_dir=tmp_path / "missing")
+
+    with pytest.raises(FileNotFoundError):
+        with TestClient(create_app(settings)):
+            pass
+
+    assert len(pools) == 1
+    assert pools[0].closed  # an error before the first request must not leak the pool's threads
