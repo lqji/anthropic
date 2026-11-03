@@ -16,6 +16,9 @@ from clinic.repositories.messages import MessageRow
 
 logger = logging.getLogger("clinic.conversation")
 
+# Must match the CHECK constraint on conversations.status (sql/01_conversations.sql).
+CONVERSATION_STATUSES = frozenset({"active", "awaiting_approval", "closed"})
+
 
 @dataclass(frozen=True)
 class TurnResult:
@@ -64,10 +67,11 @@ class ConversationService:
             return conversation, messages.list_for(conn, cid)
 
     def handle_message(self, conversation_id: str, text: str) -> TurnResult:
-        """404 if unknown, 409 if another message is in progress, else store, run, store reply.
+        """404 if unknown, 409 if another message is in progress, else run the turn and store it.
 
         No database connection is held while the workflow runs (it may call the LLM), so slow
-        turns cannot exhaust the pool.
+        turns cannot exhaust the pool. The patient message and the reply are stored together,
+        only after the workflow succeeded: a failed turn stores nothing, so a retry is clean.
         """
         cid = _parse_id(conversation_id)
         with self._pool.connection() as conn:
@@ -75,12 +79,17 @@ class ConversationService:
                 raise NotFound("conversation not found")
 
         with self._locks.hold(str(cid)):
+            result = self._paused_reply(cid) or self._workflow.run_turn(str(cid), text)
+            if result.status not in CONVERSATION_STATUSES:
+                logger.error(
+                    "conversation.invalid_workflow_status",
+                    extra={"fields": {"status": result.status}},
+                )
+                raise WorkflowUnavailable("the workflow returned an invalid status")
+
+            # One connection block is one transaction: both messages and the status, or nothing.
             with self._pool.connection() as conn:
                 messages.add(conn, cid, "patient", text, self._clock.now())
-
-            result = self._paused_reply(cid) or self._workflow.run_turn(str(cid), text)
-
-            with self._pool.connection() as conn:
                 messages.add(
                     conn,
                     cid,

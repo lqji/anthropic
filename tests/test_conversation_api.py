@@ -1,5 +1,5 @@
+import logging
 import threading
-import time
 from collections.abc import Callable, Iterator
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -11,28 +11,38 @@ from fastapi.testclient import TestClient
 
 from clinic.app import create_app
 from clinic.config import Settings
+from clinic.errors import LLMUnavailable
 from clinic.services.conversation import TurnResult
 
 SEED_DIR = Path(__file__).resolve().parents[1] / "seed" / "clinic_docs"
 
 
 class FakeWorkflow:
-    """Stands in for CFD-05's graph. `gate` pauses a turn; `delay` slows every turn."""
+    """Stands in for CFD-05's graph.
+
+    `gate` pauses a turn until set; `barrier` makes turns wait for each other; `error` makes every
+    turn fail; `status` is the conversation status every turn returns.
+    """
 
     def __init__(self) -> None:
         self.calls: list[tuple[str, str]] = []
         self.entered = threading.Event()
         self.gate: threading.Event | None = None
-        self.delay = 0.0
+        self.barrier: threading.Barrier | None = None
+        self.error: Exception | None = None
+        self.status = "active"
 
     def run_turn(self, conversation_id: str, text: str) -> TurnResult:
         self.calls.append((conversation_id, text))
         self.entered.set()
         if self.gate is not None:
             self.gate.wait(10)
-        time.sleep(self.delay)
+        if self.barrier is not None:
+            self.barrier.wait(timeout=10)
+        if self.error is not None:
+            raise self.error
         return TurnResult(
-            reply=f"echo: {text}", intent="general_question", outcome="answered", status="active"
+            reply=f"echo: {text}", intent="general_question", outcome="answered", status=self.status
         )
 
 
@@ -136,6 +146,45 @@ def test_unknown_conversation_is_404_not_found(
     assert workflow.calls == []
 
 
+def test_failed_turn_stores_nothing_and_retry_is_clean(
+    client: TestClient, workflow: FakeWorkflow
+) -> None:
+    conversation_id = _start(client)
+    url = f"/api/v1/conversations/{conversation_id}/messages"
+    workflow.error = LLMUnavailable("model timed out")
+
+    failed = client.post(url, json={"text": "hello"})
+    after_failure = client.get(f"/api/v1/conversations/{conversation_id}").json()["messages"]
+    workflow.error = None
+    retried = client.post(url, json={"text": "hello"})
+    after_retry = client.get(f"/api/v1/conversations/{conversation_id}").json()["messages"]
+
+    assert failed.status_code == 503
+    assert failed.json()["code"] == "llm_unavailable"
+    assert after_failure == []
+    assert retried.status_code == 200
+    assert [m["text"] for m in after_retry] == ["hello", "echo: hello"]
+
+
+def test_invalid_workflow_status_is_503_and_stores_nothing(
+    client: TestClient, workflow: FakeWorkflow, caplog: pytest.LogCaptureFixture
+) -> None:
+    conversation_id = _start(client)
+    workflow.status = "paused-ish"
+
+    with caplog.at_level(logging.ERROR, logger="clinic.conversation"):
+        response = client.post(
+            f"/api/v1/conversations/{conversation_id}/messages", json={"text": "hello"}
+        )
+
+    assert response.status_code == 503
+    assert response.json()["code"] == "workflow_unavailable"
+    assert client.get(f"/api/v1/conversations/{conversation_id}").json()["messages"] == []
+    assert [r.getMessage() for r in caplog.records if r.name == "clinic.conversation"] == [
+        "conversation.invalid_workflow_status"
+    ]
+
+
 def test_without_a_workflow_a_message_is_503_not_a_fake_reply(settings: Settings) -> None:
     with TestClient(create_app(settings)) as client:
         conversation_id = _start(client)
@@ -219,20 +268,28 @@ def test_two_simultaneous_messages_one_200_one_409(
 
 
 def test_ten_conversations_messaged_at_once_all_200(
-    client: TestClient, workflow: FakeWorkflow
+    make_settings: Callable[..., Settings], database_url: str
 ) -> None:
-    conversation_ids = [_start(client, f"patient-{n}") for n in range(10)]
-    workflow.delay = 0.2  # keep all ten turns in flight together
+    # The barrier only opens when all ten turns are inside the workflow at the same time. With
+    # a pool of 2, holding a connection during the workflow would starve the other eight (503).
+    workflow = FakeWorkflow()
+    workflow.barrier = threading.Barrier(10)
+    settings = make_settings(
+        database_url=database_url, clinic_docs_dir=SEED_DIR, db_pool_max_size=2
+    )
 
-    with ThreadPoolExecutor(max_workers=10) as pool:
-        responses = list(
-            pool.map(
-                lambda cid: client.post(
-                    f"/api/v1/conversations/{cid}/messages", json={"text": "hello"}
-                ),
-                conversation_ids,
+    with TestClient(create_app(settings, workflow)) as client:
+        conversation_ids = [_start(client, f"patient-{n}") for n in range(10)]
+        with ThreadPoolExecutor(max_workers=10) as pool:
+            responses = list(
+                pool.map(
+                    lambda cid: client.post(
+                        f"/api/v1/conversations/{cid}/messages", json={"text": "hello"}
+                    ),
+                    conversation_ids,
+                )
             )
-        )
 
     assert [r.status_code for r in responses] == [200] * 10
     assert sorted(cid for cid, _ in workflow.calls) == sorted(conversation_ids)
+    assert not workflow.barrier.broken
