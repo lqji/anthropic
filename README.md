@@ -110,16 +110,16 @@ APP_VERSION=<tag> docker compose up --build -d --wait
 scripts/smoke_test.sh                           # http://localhost:8000, or pass another base URL
 ```
 
-On a live system use `SKIP_EMERGENCY=1 scripts/smoke_test.sh`. The emergency check leaves a flag
-in the staff list that no endpoint can close (its text starts with "SMOKE TEST" so staff can tell
-it apart).
+The emergency check is left out by default, because it leaves a flag in the staff list that no
+endpoint can close. On a demo or staging system add it with `RUN_EMERGENCY=1 scripts/smoke_test.sh`
+(the flag text starts with "SMOKE TEST" so staff can tell it apart).
 
 `--wait` returns only when both services are healthy. The smoke test then walks through every
 feature: health, a clinic question, a question the documents do not cover, a booking, a
-cancellation that waits for staff, and an emergency. It prints one `ok` line per check, stops at
+cancellation that waits for staff, and (with `RUN_EMERGENCY=1`) an emergency. It prints one `ok` line per check, stops at
 the first failure with the check name and the response, and exits 1 (it exits 0 only if every check
-passed). Run it after every deploy. If it fails after the booking step, that test slot (patient
-`smoke-test-…`) stays booked until you free it or reset the demo data.
+passed). Run it after every deploy. If a check fails after the booking, the script cancels its own
+test booking before it exits.
 
 The database lives in the `pgdata` volume, so a normal deploy keeps all data. **First deploy or a
 clean demo:** `docker compose down -v` deletes the volume, and the demo slots are seeded again for

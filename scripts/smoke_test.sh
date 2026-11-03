@@ -8,7 +8,8 @@
 #
 # It uses its own patient_ref, so it never touches real patients. It books a slot on a later day
 # and cancels it again, so the slot is free afterwards. Its emergency check leaves a flag in the
-# staff list (text starting "SMOKE TEST"); set SKIP_EMERGENCY=1 to leave that check out.
+# staff list (text starting "SMOKE TEST"), so that check runs only with RUN_EMERGENCY=1. If a check
+# fails after the booking, the script cancels its own test booking on the way out.
 # The booking steps need a free slot on one of the next 4 days: the demo slots are seeded once for
 # 5 days, so on an old database run `docker compose down -v` first.
 set -u -o pipefail
@@ -23,10 +24,11 @@ for tool in curl jq; do
 done
 
 BODY_FILE="$(mktemp)"
-trap 'rm -f "$BODY_FILE"' EXIT
 STATUS=""
 BODY=""
 CHECKS=0
+CONVERSATION=""
+BOOKED=0     # 1 once the test booking exists, 0 again once the cancellation was approved
 
 fail() { # fail <check> <what was wrong>
   echo "FAIL $1: $2" >&2
@@ -69,6 +71,22 @@ say() { # say <conversation id> <text> -> sets STATUS and BODY
 day_in_clinic() { # day_in_clinic <days from today> -> YYYY-MM-DD in clinic time (GNU or BSD date)
   TZ="$CLINIC_TIMEZONE" date -d "+$1 day" +%F 2>/dev/null || TZ="$CLINIC_TIMEZONE" date -v+"$1"d +%F
 }
+
+cleanup() { # on every exit: remove the temp file, and cancel the test booking if a check failed
+  rm -f "$BODY_FILE"
+  [ "$BOOKED" = 1 ] && [ -n "$CONVERSATION" ] || return 0
+  echo "cleanup: cancelling the test booking" >&2
+  call GET "/api/v1/approvals?status=pending&limit=500"
+  local approval
+  approval="$(printf '%s' "$BODY" | jq -r --arg id "$CONVERSATION" '[.[] | select(.conversation_id == $id)][0].id // empty' 2>/dev/null)"
+  if [ -z "$approval" ]; then
+    say "Cancel my appointment"
+    approval="$(field '.approval_id // empty')"
+  fi
+  [ -n "$approval" ] && call POST "/api/v1/approvals/$approval/approve" '{"decided_by":"smoke-test","reason":"smoke test cleanup"}'
+  return 0
+}
+trap cleanup EXIT
 
 # 1. The service and its database are up.
 call GET /health
@@ -139,6 +157,7 @@ case "$(field '.reply')" in
   *"$DOCTOR_NAME"*) ;;
   *) fail "book" "the confirmation does not name $DOCTOR_NAME" ;;
 esac
+BOOKED=1
 pass "booking: confirmed at once with $DOCTOR_NAME for $SLOT_DAY"
 
 # 7. A cancellation waits for staff, and approving it cancels the booking.
@@ -157,13 +176,14 @@ call POST "/api/v1/approvals/$APPROVAL/approve" '{"decided_by":"smoke-test","rea
 expect_status "approve" 200
 expect_field "approve" '.status' approved
 case "$(field '.patient_message')" in *"cancelled"*) ;; *) fail "approve" "the patient is not told the booking is cancelled" ;; esac
+BOOKED=0
 pass "cancellation: paused for staff, approved, booking cancelled"
 
 # 8. An emergency is answered at once and flagged for staff. The flag stays in the staff list
 # (there is no endpoint to close it); its text starts with "SMOKE TEST" so staff can tell it apart.
-# SKIP_EMERGENCY=1 leaves this check out, for a live system where staff should not see the flag.
-if [ "${SKIP_EMERGENCY:-}" = 1 ]; then
-  echo "skip emergency (SKIP_EMERGENCY=1)"
+# Off by default so that a run against a live system never raises a flag; RUN_EMERGENCY=1 turns it on.
+if [ "${RUN_EMERGENCY:-}" != 1 ]; then
+  echo "skip emergency check (set RUN_EMERGENCY=1 to include it; it leaves a flag for staff)"
 else
   say "SMOKE TEST: I have crushing chest pain"
   expect_status "emergency" 200
