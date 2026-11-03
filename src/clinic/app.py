@@ -9,7 +9,7 @@ from fastapi import FastAPI
 from psycopg_pool import ConnectionPool
 
 from clinic import __version__
-from clinic.api import health
+from clinic.api import conversations, health
 from clinic.clock import SystemClock
 from clinic.config import Settings
 from clinic.db import make_pool
@@ -19,6 +19,7 @@ from clinic.locks import ConversationLocks
 from clinic.observability import configure_logging, install_request_logging
 from clinic.rag.loader import KnowledgeLoader
 from clinic.schema import apply_schema
+from clinic.services.conversation import ConversationWorkflow, UnavailableWorkflow
 
 logger = logging.getLogger("clinic.startup")
 
@@ -63,7 +64,8 @@ def keep_preparing(pool: ConnectionPool, settings: Settings, stop: threading.Eve
             return
 
 
-def create_app(settings: Settings) -> FastAPI:
+def create_app(settings: Settings, workflow: ConversationWorkflow | None = None) -> FastAPI:
+    """`workflow` runs each conversation turn; until CFD-05 wires in its graph, turns get 503."""
     configure_logging()
 
     @asynccontextmanager
@@ -82,7 +84,11 @@ def create_app(settings: Settings) -> FastAPI:
             )
             retry.start()
         app.state.deps = Deps(
-            settings=settings, pool=pool, clock=SystemClock(), locks=ConversationLocks()
+            settings=settings,
+            pool=pool,
+            clock=SystemClock(),
+            locks=ConversationLocks(),
+            workflow=workflow or UnavailableWorkflow(),
         )
         try:
             yield
@@ -96,4 +102,5 @@ def create_app(settings: Settings) -> FastAPI:
     install_request_logging(app)
     install_error_handlers(app)
     app.include_router(health.router)
+    app.include_router(conversations.router)
     return app

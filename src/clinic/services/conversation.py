@@ -1,0 +1,112 @@
+"""Start conversations, handle patient messages, and read a conversation back."""
+
+import logging
+from dataclasses import dataclass
+from typing import Protocol
+from uuid import UUID, uuid4
+
+from psycopg_pool import ConnectionPool
+
+from clinic.clock import Clock
+from clinic.errors import NotFound, WorkflowUnavailable
+from clinic.locks import ConversationLocks
+from clinic.repositories import conversations, messages
+from clinic.repositories.conversations import ConversationRow
+from clinic.repositories.messages import MessageRow
+
+logger = logging.getLogger("clinic.conversation")
+
+
+@dataclass(frozen=True)
+class TurnResult:
+    reply: str
+    intent: str
+    outcome: str
+    status: str
+
+
+class ConversationWorkflow(Protocol):
+    """Runs one turn of a conversation. CFD-05's LangGraph workflow implements this."""
+
+    def run_turn(self, conversation_id: str, text: str) -> TurnResult: ...
+
+
+class UnavailableWorkflow:
+    """Used until a real workflow is wired in: every turn is a clear 503, never a fake reply."""
+
+    def run_turn(self, conversation_id: str, text: str) -> TurnResult:
+        raise WorkflowUnavailable("the conversation workflow is not available yet")
+
+
+class ConversationService:
+    def __init__(
+        self,
+        pool: ConnectionPool,
+        clock: Clock,
+        locks: ConversationLocks,
+        workflow: ConversationWorkflow,
+    ) -> None:
+        self._pool = pool
+        self._clock = clock
+        self._locks = locks
+        self._workflow = workflow
+
+    def start(self, patient_ref: str) -> ConversationRow:
+        with self._pool.connection() as conn:
+            return conversations.create(conn, uuid4(), patient_ref, self._clock.now())
+
+    def get(self, conversation_id: str) -> tuple[ConversationRow, list[MessageRow]]:
+        cid = _parse_id(conversation_id)
+        with self._pool.connection() as conn:
+            conversation = conversations.get(conn, cid)
+            if conversation is None:
+                raise NotFound("conversation not found")
+            return conversation, messages.list_for(conn, cid)
+
+    def handle_message(self, conversation_id: str, text: str) -> TurnResult:
+        """404 if unknown, 409 if another message is in progress, else store, run, store reply.
+
+        No database connection is held while the workflow runs (it may call the LLM), so slow
+        turns cannot exhaust the pool.
+        """
+        cid = _parse_id(conversation_id)
+        with self._pool.connection() as conn:
+            if conversations.get(conn, cid) is None:
+                raise NotFound("conversation not found")
+
+        with self._locks.hold(str(cid)):
+            with self._pool.connection() as conn:
+                messages.add(conn, cid, "patient", text, self._clock.now())
+
+            result = self._paused_reply(cid) or self._workflow.run_turn(str(cid), text)
+
+            with self._pool.connection() as conn:
+                messages.add(
+                    conn,
+                    cid,
+                    "assistant",
+                    result.reply,
+                    self._clock.now(),
+                    intent=result.intent,
+                    outcome=result.outcome,
+                )
+                conversations.set_status(conn, cid, result.status)
+
+        logger.info(
+            "conversation.turn",
+            extra={"fields": {"intent": result.intent, "outcome": result.outcome}},
+        )
+        return result
+
+    def _paused_reply(self, conversation_id: UUID) -> TurnResult | None:
+        """Hook for CFD-14: a conversation waiting for staff approval answers "still waiting"
+        without invoking the workflow. Until then no conversation is ever paused."""
+        return None
+
+
+def _parse_id(conversation_id: str) -> UUID:
+    """An id that is not a UUID cannot exist, so it is a 404 rather than a database error."""
+    try:
+        return UUID(conversation_id)
+    except ValueError:
+        raise NotFound("conversation not found") from None

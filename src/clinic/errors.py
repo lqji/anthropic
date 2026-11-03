@@ -43,6 +43,11 @@ class LLMUnavailable(AppError):
     code = "llm_unavailable"
 
 
+class WorkflowUnavailable(AppError):
+    status_code = 503
+    code = "workflow_unavailable"
+
+
 _HTTP_CODES = {404: "not_found", 405: "method_not_allowed"}
 
 

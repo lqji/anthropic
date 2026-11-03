@@ -5,6 +5,7 @@ from psycopg_pool import ConnectionPool
 from clinic.clock import Clock
 from clinic.config import Settings
 from clinic.locks import ConversationLocks
+from clinic.services.conversation import ConversationWorkflow
 
 
 @dataclass(frozen=True)
@@ -15,3 +16,4 @@ class Deps:
     pool: ConnectionPool
     clock: Clock
     locks: ConversationLocks
+    workflow: ConversationWorkflow

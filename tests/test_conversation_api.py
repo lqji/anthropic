@@ -1,0 +1,238 @@
+import threading
+import time
+from collections.abc import Callable, Iterator
+from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
+from uuid import UUID, uuid4
+
+import psycopg
+import pytest
+from fastapi.testclient import TestClient
+
+from clinic.app import create_app
+from clinic.config import Settings
+from clinic.services.conversation import TurnResult
+
+SEED_DIR = Path(__file__).resolve().parents[1] / "seed" / "clinic_docs"
+
+
+class FakeWorkflow:
+    """Stands in for CFD-05's graph. `gate` pauses a turn; `delay` slows every turn."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, str]] = []
+        self.entered = threading.Event()
+        self.gate: threading.Event | None = None
+        self.delay = 0.0
+
+    def run_turn(self, conversation_id: str, text: str) -> TurnResult:
+        self.calls.append((conversation_id, text))
+        self.entered.set()
+        if self.gate is not None:
+            self.gate.wait(10)
+        time.sleep(self.delay)
+        return TurnResult(
+            reply=f"echo: {text}", intent="general_question", outcome="answered", status="active"
+        )
+
+
+@pytest.fixture
+def settings(make_settings: Callable[..., Settings], database_url: str) -> Settings:
+    return make_settings(database_url=database_url, clinic_docs_dir=SEED_DIR)
+
+
+@pytest.fixture
+def workflow() -> FakeWorkflow:
+    return FakeWorkflow()
+
+
+@pytest.fixture
+def client(settings: Settings, database_url: str, workflow: FakeWorkflow) -> Iterator[TestClient]:
+    with TestClient(create_app(settings, workflow)) as test_client:
+        with psycopg.connect(database_url, autocommit=True, connect_timeout=5) as conn:
+            conn.execute("TRUNCATE conversations CASCADE")
+        yield test_client
+
+
+def _start(client: TestClient, patient_ref: str = "demo-patient-1") -> str:
+    response = client.post("/api/v1/conversations", json={"patient_ref": patient_ref})
+    assert response.status_code == 201, response.text
+    return str(response.json()["id"])
+
+
+# --- Start a conversation -------------------------------------------------------------------
+
+
+def test_start_conversation_returns_201_with_uuid_and_active(client: TestClient) -> None:
+    response = client.post("/api/v1/conversations", json={"patient_ref": "demo-patient-1"})
+
+    assert response.status_code == 201
+    body = response.json()
+    assert UUID(body["id"]).version == 4
+    assert body["status"] == "active"
+    assert body["patient_ref"] == "demo-patient-1"
+
+
+@pytest.mark.parametrize("payload", [{}, {"patient_ref": ""}, {"patient_ref": "   "}])
+def test_blank_or_missing_patient_ref_is_422(client: TestClient, payload: dict[str, str]) -> None:
+    response = client.post("/api/v1/conversations", json=payload)
+
+    assert response.status_code == 422
+    assert response.json()["code"] == "validation_error"
+
+
+# --- Send a message -------------------------------------------------------------------------
+
+
+def test_message_returns_reply_intent_outcome_status(
+    client: TestClient, workflow: FakeWorkflow
+) -> None:
+    conversation_id = _start(client)
+
+    response = client.post(
+        f"/api/v1/conversations/{conversation_id}/messages", json={"text": "hello"}
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "reply": "echo: hello",
+        "intent": "general_question",
+        "outcome": "answered",
+        "status": "active",
+    }
+    assert workflow.calls == [(conversation_id, "hello")]
+
+
+@pytest.mark.parametrize("text", ["", "   ", "x" * 2001])
+def test_empty_or_too_long_message_is_422(
+    client: TestClient, workflow: FakeWorkflow, text: str
+) -> None:
+    conversation_id = _start(client)
+
+    response = client.post(f"/api/v1/conversations/{conversation_id}/messages", json={"text": text})
+
+    assert response.status_code == 422
+    assert workflow.calls == []
+
+
+def test_message_of_exactly_2000_chars_is_accepted(client: TestClient) -> None:
+    conversation_id = _start(client)
+    response = client.post(
+        f"/api/v1/conversations/{conversation_id}/messages", json={"text": "x" * 2000}
+    )
+    assert response.status_code == 200
+
+
+@pytest.mark.parametrize("conversation_id", [str(uuid4()), "not-a-uuid"])
+def test_unknown_conversation_is_404_not_found(
+    client: TestClient, workflow: FakeWorkflow, conversation_id: str
+) -> None:
+    send = client.post(f"/api/v1/conversations/{conversation_id}/messages", json={"text": "hi"})
+    get = client.get(f"/api/v1/conversations/{conversation_id}")
+
+    for response in (send, get):
+        assert response.status_code == 404
+        assert response.json()["code"] == "not_found"
+    assert workflow.calls == []
+
+
+def test_without_a_workflow_a_message_is_503_not_a_fake_reply(settings: Settings) -> None:
+    with TestClient(create_app(settings)) as client:
+        conversation_id = _start(client)
+        response = client.post(
+            f"/api/v1/conversations/{conversation_id}/messages", json={"text": "hello"}
+        )
+
+    assert response.status_code == 503
+    assert response.json()["code"] == "workflow_unavailable"
+
+
+# --- Read a conversation back ---------------------------------------------------------------
+
+
+def test_get_returns_all_messages_in_order(client: TestClient) -> None:
+    conversation_id = _start(client)
+    for text in ("first", "second", "third"):
+        client.post(f"/api/v1/conversations/{conversation_id}/messages", json={"text": text})
+
+    response = client.get(f"/api/v1/conversations/{conversation_id}")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["id"] == conversation_id
+    assert [(m["role"], m["text"]) for m in body["messages"]] == [
+        ("patient", "first"),
+        ("assistant", "echo: first"),
+        ("patient", "second"),
+        ("assistant", "echo: second"),
+        ("patient", "third"),
+        ("assistant", "echo: third"),
+    ]
+    assistant = body["messages"][1]
+    assert (assistant["intent"], assistant["outcome"]) == ("general_question", "answered")
+    assert body["messages"][0]["intent"] is None
+
+
+# --- Restart, concurrency -------------------------------------------------------------------
+
+
+def test_second_app_instance_sees_the_same_messages_and_continues(
+    settings: Settings, database_url: str
+) -> None:
+    with TestClient(create_app(settings, FakeWorkflow())) as first_app:
+        conversation_id = _start(first_app)
+        first_app.post(f"/api/v1/conversations/{conversation_id}/messages", json={"text": "one"})
+
+    second_workflow = FakeWorkflow()
+    with TestClient(create_app(settings, second_workflow)) as second_app:
+        before = second_app.get(f"/api/v1/conversations/{conversation_id}").json()["messages"]
+        response = second_app.post(
+            f"/api/v1/conversations/{conversation_id}/messages", json={"text": "two"}
+        )
+        after = second_app.get(f"/api/v1/conversations/{conversation_id}").json()["messages"]
+
+    assert [m["text"] for m in before] == ["one", "echo: one"]
+    assert response.status_code == 200
+    assert second_workflow.calls == [(conversation_id, "two")]
+    assert [m["text"] for m in after] == ["one", "echo: one", "two", "echo: two"]
+
+
+def test_two_simultaneous_messages_one_200_one_409(
+    client: TestClient, workflow: FakeWorkflow
+) -> None:
+    conversation_id = _start(client)
+    url = f"/api/v1/conversations/{conversation_id}/messages"
+    workflow.gate = threading.Event()
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        first = pool.submit(client.post, url, json={"text": "first"})
+        assert workflow.entered.wait(5)
+        second = client.post(url, json={"text": "second"})
+        workflow.gate.set()
+        first_response = first.result(timeout=10)
+
+    assert first_response.status_code == 200
+    assert second.status_code == 409
+    assert second.json()["code"] == "conversation_busy"
+    messages = client.get(f"/api/v1/conversations/{conversation_id}").json()["messages"]
+    assert [m["text"] for m in messages] == ["first", "echo: first"]
+
+
+def test_ten_conversations_messaged_at_once_all_200(
+    client: TestClient, workflow: FakeWorkflow
+) -> None:
+    conversation_ids = [_start(client, f"patient-{n}") for n in range(10)]
+    workflow.delay = 0.2  # keep all ten turns in flight together
+
+    with ThreadPoolExecutor(max_workers=10) as pool:
+        responses = list(
+            pool.map(
+                lambda cid: client.post(
+                    f"/api/v1/conversations/{cid}/messages", json={"text": "hello"}
+                ),
+                conversation_ids,
+            )
+        )
+
+    assert [r.status_code for r in responses] == [200] * 10
+    assert sorted(cid for cid, _ in workflow.calls) == sorted(conversation_ids)
