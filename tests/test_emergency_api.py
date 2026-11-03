@@ -4,7 +4,7 @@ import time
 from collections.abc import Callable, Iterator
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import psycopg
 import pytest
@@ -17,6 +17,7 @@ from clinic.config import Settings
 from clinic.errors import LLMUnavailable
 from clinic.llm import ClassifyResult, ScriptedFakeLLM
 from clinic.repositories import emergencies as emergencies_repository
+from clinic.repositories import messages as messages_repository
 from tests.test_conversation_api import FakeWorkflow
 
 EMERGENCY_NUMBER = "1234"  # not the default, so the reply must come from settings
@@ -167,6 +168,89 @@ def test_emergency_on_unknown_conversation_is_404(client: TestClient) -> None:
     assert client.get("/api/v1/emergencies").json() == []
 
 
+def test_a_saved_emergency_says_staff_were_alerted(client: TestClient) -> None:
+    conversation_id = _start(client)
+
+    reply = client.post(_url(conversation_id), json={"text": CHEST_PAIN}).json()["reply"]
+
+    assert "front-desk staff have been alerted" in reply
+
+
+def test_an_emergency_cannot_land_between_a_routine_message_and_its_reply(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, database_url: str
+) -> None:
+    """The routine turn stores its two messages in one transaction; the emergency waits for it
+    (both lock the conversation row), so the stored order pairs each patient message with its
+    own reply. `count_graph_turns` relies on that pairing."""
+    conversation_id = _start(client)
+    original_add = messages_repository.add
+    first_stored = threading.Event()
+    go_on = threading.Event()
+
+    def slow_add(conn: Any, cid: Any, role: str, text: str, *args: Any, **kwargs: Any) -> Any:
+        result = original_add(conn, cid, role, text, *args, **kwargs)
+        if text == "hello":  # the routine patient message is written, its reply is not yet
+            first_stored.set()
+            go_on.wait(10)
+        return result
+
+    monkeypatch.setattr(messages_repository, "add", slow_add)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        routine = pool.submit(client.post, _url(conversation_id), json={"text": "hello"})
+        assert first_stored.wait(5)
+        emergency = pool.submit(client.post, _url(conversation_id), json={"text": CHEST_PAIN})
+        time.sleep(0.5)  # long enough for the emergency to run, if nothing made it wait
+        assert not emergency.done()  # it waits for the routine transaction
+        go_on.set()
+        assert routine.result(timeout=10).status_code == 200
+        assert emergency.result(timeout=10).status_code == 200
+    monkeypatch.undo()
+
+    messages = client.get(f"/api/v1/conversations/{conversation_id}").json()["messages"]
+    assert [m["text"] for m in messages][:2] == ["hello", "echo: hello"]
+    assert messages[2]["text"] == CHEST_PAIN
+    assert messages[3]["outcome"] == "emergency"
+    with psycopg.connect(database_url, connect_timeout=5) as conn:
+        assert messages_repository.count_graph_turns(conn, UUID(conversation_id)) == 1
+
+
+def test_concurrent_emergency_and_routine_saves_keep_turn_numbers_right(
+    client: TestClient, database_url: str
+) -> None:
+    """Routine messages and emergencies race. Two routine messages at once may get 409 (one turn
+    at a time), emergencies always get 200. Each stored message sits next to its own reply, so
+    every accepted turn is counted once and emergencies take no turn number."""
+    conversation_id = _start(client)
+    routine_count, emergency_count = 4, 4
+    barrier = threading.Barrier(routine_count + emergency_count)
+
+    def send(text: str) -> int:
+        barrier.wait(10)
+        return client.post(_url(conversation_id), json={"text": text}).status_code
+
+    with ThreadPoolExecutor(max_workers=routine_count + emergency_count) as pool:
+        futures = [pool.submit(send, f"hello {n}") for n in range(routine_count)]
+        futures += [pool.submit(send, CHEST_PAIN) for _ in range(emergency_count)]
+        statuses = [f.result(timeout=30) for f in futures]
+
+    routine_statuses, emergency_statuses = statuses[:routine_count], statuses[routine_count:]
+    assert emergency_statuses == [200] * emergency_count
+    assert set(routine_statuses) <= {200, 409} and 200 in routine_statuses
+    accepted = routine_statuses.count(200)
+    messages = client.get(f"/api/v1/conversations/{conversation_id}").json()["messages"]
+    assert len(messages) == 2 * (accepted + emergency_count)
+    for index in range(0, len(messages), 2):  # each patient message is followed by its own reply
+        patient, reply = messages[index], messages[index + 1]
+        assert patient["role"] == "patient" and reply["role"] == "assistant"
+        if patient["text"] == CHEST_PAIN:
+            assert reply["outcome"] == "emergency"
+        else:
+            assert reply["text"] == f"echo: {patient['text']}"
+    with psycopg.connect(database_url, connect_timeout=5) as conn:
+        count = messages_repository.count_graph_turns(conn, UUID(conversation_id))
+    assert count == accepted
+
+
 # --- Persistence failures: the patient still gets the instruction ---------------------------
 
 
@@ -190,6 +274,9 @@ def test_emergency_still_answered_when_the_database_is_down(
     assert emergency.status_code == 200
     body = emergency.json()
     assert EMERGENCY_NUMBER in body["reply"]
+    # Nothing was saved, so the reply must not claim staff were alerted.
+    assert "alerted" not in body["reply"]
+    assert "phone the clinic directly" in body["reply"]
     assert body["outcome"] == "emergency"
     assert workflow.calls == []
     assert routine.status_code == 503  # nothing else works without the database
@@ -216,7 +303,9 @@ def test_emergency_still_answered_when_saving_fails_and_nothing_is_half_saved(
     monkeypatch.undo()
 
     assert response.status_code == 200
-    assert EMERGENCY_NUMBER in response.json()["reply"]
+    reply = response.json()["reply"]
+    assert EMERGENCY_NUMBER in reply
+    assert "alerted" not in reply and "phone the clinic directly" in reply
     assert len(_persist_failures(caplog)) == 1
     # One transaction: the patient message written before the failure was rolled back.
     assert client.get(f"/api/v1/conversations/{conversation_id}").json()["messages"] == []

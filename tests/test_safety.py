@@ -42,6 +42,26 @@ EMERGENCIES = [
     ("I want to kill myself", "self_harm"),
     ("I'm feeling suicidal", "self_harm"),
     ("I want to end my life", "self_harm"),
+    # Phrasings a reviewer found missing: "the", other verbs, other wordings.
+    ("My baby isn't breathing", "breathing"),
+    ("he isnt breathing", "breathing"),
+    ("she wasn't breathing", "breathing"),
+    ("they aren't breathing", "breathing"),
+    ("I can barely breathe", "breathing"),
+    ("I can hardly breathe", "breathing"),
+    ("my chest is hurting", "chest_pain"),
+    ("my chest keeps hurting", "chest_pain"),
+    ("I have pain in the chest", "chest_pain"),
+    ("I think I'm having an allergic reaction", "allergic_reaction"),
+    ("my lips are swelling", "allergic_reaction"),
+    ("his face is swollen", "allergic_reaction"),
+    ("the bleeding won't stop", "severe_bleeding"),
+    ("the bleeding doesn't stop", "severe_bleeding"),
+    ("blood everywhere", "severe_bleeding"),
+    ("I don't want to live anymore", "self_harm"),
+    ("I do not want to live", "self_harm"),
+    ("he fainted", "unconscious"),
+    ("she has fainted", "unconscious"),
 ]
 
 ROUTINE = [
@@ -65,6 +85,12 @@ ROUTINE = [
     "I need a short appointment next week",
     "I can't make it tomorrow, can I cancel?",
     "I won't be able to come on Sunday",
+    "I need an allergy test",
+    "Can I book a scan of the chest?",
+    "My lip balm ran out, do you sell any?",
+    "The bleeding stopped yesterday, do I still need the check?",
+    "I don't want to wait, can I come earlier?",
+    "She isn't registered with you yet",
 ]
 
 # Every apostrophe-like character that can stand in for ' in "can't".

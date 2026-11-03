@@ -6,7 +6,7 @@ missed emergency is dangerous. Negations ("no chest pain") therefore still match
 
 import re
 
-_PERSON = r"(?:my|his|her|their|our)"
+_PERSON = r"(?:my|his|her|their|our|the)"
 
 # (rule name, phrases). Matched on normalised text (see `normalise`), whole words only.
 # The first rule that matches names the emergency, so order goes from most to least specific.
@@ -14,7 +14,7 @@ _RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
     (
         "chest_pain",
         (
-            r"chest (?:pain|pains|ache|hurts|hurting|pressure|tightness)",
+            r"chest (?:is |keeps |has been )?(?:pain|pains|ache|hurts|hurting|pressure|tightness)",
             rf"(?:pain|pressure|tightness) (?:in|on) {_PERSON} chest",
             r"chest (?:is|feels) (?:tight|heavy|crushed)",
             r"heart attack",
@@ -29,7 +29,8 @@ _RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
             r"(?:difficulty|trouble) breathing",
             r"breathing (?:is |was )?(?:hard|difficult|laboured|labored)",
             r"short(?:ness)? of breath",
-            r"(?:not|stopped) breathing",
+            r"(?:not|isnt|wasnt|arent|stopped) breathing",
+            r"(?:barely|hardly) (?:breathe|breathing|breath)",
             r"gasping for (?:air|breath)",
             r"choking",
         ),
@@ -38,7 +39,8 @@ _RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
         "allergic_reaction",
         (
             r"anaphyla(?:xis|ctic)",
-            r"(?:throat|tongue) (?:is )?(?:swelling|swollen|closing)",
+            r"allergic reaction",
+            r"(?:throat|tongue|lips?|face) (?:is |are )?(?:swelling|swollen|closing)",
         ),
     ),
     (
@@ -60,6 +62,7 @@ _RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
             r"unresponsive",
             r"not responding",
             r"passed out",
+            r"(?:fainted|fainting)",
             r"collapsed",
             r"(?:wont|cant) wake (?:up|him|her|them)",
         ),
@@ -70,6 +73,8 @@ _RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
             r"bleeding (?:heavily|badly|everywhere|profusely|a lot)",
             r"(?:heavy|severe|uncontrolled|uncontrollable) bleeding",
             r"(?:wont|cant|will not) stop bleeding",
+            r"bleeding (?:wont|will not|doesnt|does not|isnt|cant) stop",
+            r"blood (?:everywhere|all over)",
             r"lots? of blood",
         ),
     ),
@@ -99,6 +104,7 @@ _RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
             r"suicid(?:e|al)",
             rf"end {_PERSON} life",
             r"want to die",
+            r"(?:dont|do not) want to (?:live|be alive)",
         ),
     ),
 )

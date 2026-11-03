@@ -96,7 +96,12 @@ class ConversationService:
                 raise WorkflowUnavailable("the workflow returned an invalid status")
 
             # One connection block is one transaction: both messages and the status, or nothing.
+            # The row lock keeps an emergency (which locks the same row) from storing its
+            # messages between the patient message and the reply of this turn.
             with self._pool.connection() as conn:
+                if conversations.get(conn, cid, for_update=True) is None:
+                    raise NotFound("conversation not found")
+                conversations.set_status(conn, cid, result.status)
                 messages.add(conn, cid, "patient", text, self._clock.now())
                 messages.add(
                     conn,
@@ -107,7 +112,6 @@ class ConversationService:
                     intent=result.intent,
                     outcome=result.outcome,
                 )
-                conversations.set_status(conn, cid, result.status)
 
         logger.info(
             "conversation.turn",

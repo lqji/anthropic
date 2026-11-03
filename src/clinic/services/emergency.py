@@ -20,6 +20,11 @@ EMERGENCY_REPLY = (
     "This may be a medical emergency. Call {number} now or go to the nearest emergency "
     "department. Our front-desk staff have been alerted."
 )
+# Used when the flag could not be saved: no claim that staff know, and a second way to reach them.
+EMERGENCY_REPLY_UNSAVED = (
+    "This may be a medical emergency. Call {number} now or go to the nearest emergency "
+    "department. Please also phone the clinic directly."
+)
 
 
 class EmergencyService:
@@ -32,21 +37,26 @@ class EmergencyService:
         """None for a routine message. For an emergency: store the patient message, the staff
         flag and the instruction in one transaction, and return the instruction.
 
-        Deterministic rules only; it takes no conversation lock and never calls the workflow,
-        so it answers even while another turn is running or the LLM is down. The instruction
-        needs no database either: if the database is down or the write fails, the error is
-        logged and the patient still gets the instruction (nothing is half-saved, the
-        transaction rolls back). Only a conversation that does not exist is an error (404).
+        Deterministic rules only; it never calls the workflow, so it answers even while another
+        turn is running or the LLM is down. It does lock the conversation row for the length of
+        its own transaction (see below). The instruction needs no database: if the database is
+        down or the write fails, the error is logged and the patient still gets the instruction
+        (nothing is half-saved, the transaction rolls back), but a version that does not say
+        staff were alerted, because they were not. Only a conversation that does not exist is
+        an error (404).
         """
         rule = match_emergency(text)
         if rule is None:
             return None
 
         reply = EMERGENCY_REPLY.format(number=self._emergency_number)
+        unsaved_reply = EMERGENCY_REPLY_UNSAVED.format(number=self._emergency_number)
         status = "active"  # the real status is unknown if the database cannot be read
         try:
             with self._pool.connection() as conn:
-                conversation = conversations.get(conn, conversation_id)
+                # FOR UPDATE: a routine turn stores its messages and status in a transaction
+                # that updates this row, so the two cannot interleave and number turns wrongly.
+                conversation = conversations.get(conn, conversation_id, for_update=True)
                 if conversation is None:
                     raise NotFound("conversation not found")
                 status = conversation.status
@@ -68,6 +78,7 @@ class EmergencyService:
                 "emergency.persist_failed",
                 extra={"fields": {"matched_rule": rule, "error": type(exc).__name__}},
             )
+            reply = unsaved_reply
         else:
             logger.warning("emergency.flagged", extra={"fields": {"matched_rule": rule}})
         return TurnResult(reply=reply, intent="emergency", outcome="emergency", status=status)
