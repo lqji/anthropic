@@ -21,7 +21,6 @@ services:
     pull_policy: build
     env_file: .env
     environment:
-      APP_VERSION: ${APP_VERSION:-dev}
       DATABASE_URL: postgresql://${POSTGRES_USER:-clinic}:${POSTGRES_PASSWORD:-change-me-local-only}@db:5432/${POSTGRES_DB:-clinic}
     ports:
       - "${API_PORT:-8000}:8000"

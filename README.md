@@ -67,7 +67,7 @@ All settings are environment variables; the service refuses to start and names e
 | `RAG_MIN_SCORE`, `RAG_TOP_K` | `0.30`, `3` | Minimum score and number of document sections used to answer. |
 | `CLINIC_DOCS_DIR` | `seed/clinic_docs` | Markdown documents loaded at startup. |
 | `LANGGRAPH_STRICT_MSGPACK` | `true` | Keep `true`: checkpoints may only hold plain data. |
-| `APP_VERSION` | `dev` | Tags the image (`clinic-api:<version>`) and is shown by `/health`. |
+| `APP_VERSION` | `dev` | Names the image (`clinic-api:<version>`); pass it on the command line, not in `.env`. `/health` reports the version of the code (`src/clinic/__init__.py`) whatever this says, so it cannot disagree with what is running. |
 
 ## Deploy and roll back
 
@@ -106,13 +106,17 @@ authenticating proxy in front of it.
 
 ```bash
 git fetch --tags && git checkout <tag>          # for example v0.1.0
-APP_VERSION=<tag> docker compose up --build -d --wait
+APP_VERSION=<version> docker compose up --build -d --wait
 scripts/smoke_test.sh                           # http://localhost:8000, or pass another base URL
 ```
 
 The emergency check is left out by default, because it leaves a flag in the staff list that no
 endpoint can close. On a demo or staging system add it with `RUN_EMERGENCY=1 scripts/smoke_test.sh`
 (the flag text starts with "SMOKE TEST" so staff can tell it apart).
+
+`<version>` is the tag without the leading `v` (tag `v0.1.0` is version `0.1.0`). It only names the
+image (`clinic-api:0.1.0`), so that two releases can sit side by side for a rollback. `/health`
+reports the version of the code you built (the `APP_VERSION` variable is ignored), so check it after a deploy: it should match the tag.
 
 `--wait` returns only when both services are healthy. The smoke test then walks through every
 feature: health, a clinic question, a question the documents do not cover, a booking, a
@@ -135,7 +139,7 @@ tag may not contain the smoke test, so copy it out of the checkout first and run
 ```bash
 SMOKE="$(mktemp)" && cp scripts/smoke_test.sh "$SMOKE"
 git checkout <previous-tag>
-APP_VERSION=<previous-tag> docker compose up --build -d --wait
+APP_VERSION=<previous-version> docker compose up --build -d --wait
 bash "$SMOKE"; rm -f "$SMOKE"
 ```
 
@@ -167,7 +171,7 @@ docker compose up -d --wait db              # a new, empty database
 docker compose exec -T db sh -c 'psql -v ON_ERROR_STOP=1 --single-transaction -U "$POSTGRES_USER" "$POSTGRES_DB"' < backup-<date>.sql
 # 3. Deploy the old release.
 git checkout <previous-tag>
-APP_VERSION=<previous-tag> docker compose up --build -d --wait
+APP_VERSION=<previous-version> docker compose up --build -d --wait
 bash "$SMOKE"
 ```
 
@@ -176,6 +180,19 @@ to. Delete both backup files when you no longer need them.
 
 After a rollback the checkout is on the old tag (detached HEAD). To go forward again, run
 `git checkout <tag>` for the release you want and deploy it as above.
+
+### Cut a release
+
+1. Merge everything the release needs. From then on (code freeze) only the release PR merges.
+2. Tag a release candidate on `main` (`git tag v0.1.0-rc.1 && git push origin v0.1.0-rc.1`) and deploy it
+   on the VM as above. A teammate who did not write the compose file clones the tag, runs
+   `cp .env.example .env`, adds only the OpenAI key, `docker compose up --build -d --wait`, and runs
+   `scripts/smoke_test.sh`.
+3. The release PR bumps the version in `pyproject.toml` and `src/clinic/__init__.py`, runs `uv lock`
+   and adds the section to `CHANGELOG.md`. After it merges, tag `main` (`git tag v0.1.0`), push the tag
+   and create the GitHub release with the changelog section as its notes.
+4. Deploy `0.1.0` on the VM, check that `/health` reports `0.1.0` and run the smoke test. Practise the
+   rollback to the release candidate and forward again.
 
 ### If something is wrong
 
@@ -187,6 +204,8 @@ After a rollback the checkout is on the old tag (detached HEAD). To go forward a
 | a request gets 503 `llm_unavailable` | `OPENAI_API_KEY`, or the provider is down; `LLM_PROVIDER=fake` keeps the demo running |
 
 ## Known limitations
+
+The full list for each release is in [CHANGELOG.md](CHANGELOG.md).
 
 - No authentication on `/api/v1` (trusted network only; put an authenticating proxy in front).
 - A pending approval never expires.
