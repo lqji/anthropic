@@ -45,6 +45,9 @@ class ConversationState(ApprovalState, total=False):
     sources: list[dict[str, str]]  # {"document": ..., "heading": ...} (CFD-11)
     # Slots last shown to the patient, kept across turns for "book the first one" (CFD-12/13).
     offered_slots: list[dict[str, str | int]]
+    # Booking made this turn by `book`, for `confirm_booking` (CFD-13):
+    # {"booking_id", "doctor", "starts_at"}. Empty when this turn booked nothing.
+    booking: dict[str, str | int]
 
 
 def turn_id_for(conversation_id: str, turn_number: int) -> str:
@@ -88,6 +91,7 @@ def new_turn(
         "booking_label": None,
         "decision": None,
         "decision_reason": None,
+        "booking": {},
     }
     if conversation_id is not None:
         turn["conversation_id"] = conversation_id
