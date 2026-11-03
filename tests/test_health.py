@@ -5,6 +5,7 @@ from collections.abc import Callable
 import pytest
 from fastapi.testclient import TestClient
 
+from clinic import __version__
 from clinic.app import create_app
 from clinic.config import Settings
 
@@ -18,6 +19,16 @@ def test_health_ok_with_database(make_settings: Callable[..., Settings], databas
     assert body["status"] == "ok"
     assert body["database"] == "ok"
     assert body["version"]
+
+
+def test_health_reports_the_version_of_the_code(
+    make_settings: Callable[..., Settings], database_url: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("APP_VERSION", raising=False)
+    app = create_app(make_settings(database_url=database_url))
+    with TestClient(app) as client:
+        body = client.get("/health").json()
+    assert body["version"] == __version__
 
 
 def test_health_degraded_when_database_is_down(
