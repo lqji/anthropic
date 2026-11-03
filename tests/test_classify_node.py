@@ -291,3 +291,21 @@ def test_an_empty_catalogue_asks_the_generic_question_instead_of_an_empty_list()
     assert entities == {"unknown_doctor": "Dr. Salma Nasser"}
     update = clarify({"entities": entities})
     assert update["reply"] == CLARIFY_REPLY
+
+
+@pytest.mark.parametrize(
+    ("doctors", "specialties", "expected"),
+    [
+        (("Dr. A",), ("Dermatology",), "doctors: Dr. A; specialties: Dermatology"),
+        ((), ("Dermatology",), "specialties: Dermatology"),
+        (("Dr. A", "Dr. B"), (), "doctors: Dr. A, Dr. B"),
+    ],
+)
+def test_valid_choices_lists_only_the_non_empty_names(
+    doctors: tuple[str, ...], specialties: tuple[str, ...], expected: str
+) -> None:
+    result = ClassifyResult(intent="book", doctor="Dr. Zaid")
+
+    entities = _entities(result, doctors=doctors, specialties=specialties)
+
+    assert entities["valid_choices"] == expected

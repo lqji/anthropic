@@ -81,10 +81,15 @@ def _entities(
         else:
             entities[unknown_key] = value.strip()[:_MAX_UNKNOWN_CHARS]
             unknown = True
-    if unknown and (doctors or specialties):
-        entities[VALID_CHOICES] = (
-            f"doctors: {', '.join(doctors)}; specialties: {', '.join(specialties)}"
-        )
+    if unknown:
+        # Only the lists that have names: an empty catalogue must not read "doctors: ; ...".
+        parts = [
+            f"{label}: {', '.join(names)}"
+            for label, names in (("doctors", doctors), ("specialties", specialties))
+            if names
+        ]
+        if parts:
+            entities[VALID_CHOICES] = "; ".join(parts)
     if result.date and _is_iso_date(result.date):
         entities["date"] = result.date
     return entities
