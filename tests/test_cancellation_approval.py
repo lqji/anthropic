@@ -12,6 +12,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from clinic.config import Settings
+from clinic.errors import WorkflowUnavailable
 from clinic.repositories import approvals
 from clinic.schema import apply_schema
 from clinic.workflows.approval import ApprovalState
@@ -445,3 +446,145 @@ def test_two_conversations_racing_for_one_booking_get_one_approval(
 def _pending_rows(settings: Settings) -> list[approvals.ApprovalRow]:
     with psycopg.connect(settings.database_url) as conn:
         return approvals.list_by_status(conn, "pending")
+
+
+# --- A resume that fails after the decision was saved ---------------------------------------
+
+
+def _approval(settings: Settings, approval_id: str) -> approvals.ApprovalRow:
+    with psycopg.connect(settings.database_url) as conn:
+        row = approvals.get(conn, UUID(approval_id))
+    assert row is not None
+    return row
+
+
+def _approve(client: TestClient, approval_id: str) -> Any:
+    return client.post(f"/api/v1/approvals/{approval_id}/approve", json=DECISION)
+
+
+def test_failed_resume_is_a_json_503_and_the_same_decision_can_be_retried(
+    settings: Settings, bookings: FakeBookings, caplog: pytest.LogCaptureFixture
+) -> None:
+    with running_app(settings, bookings) as (client, harness):
+        conversation_id, approval_id = _request_cancellation(client)
+        bookings.cancel_error = RuntimeError("booking service timed out")
+
+        with caplog.at_level(logging.ERROR, logger="clinic.approval"):
+            failed = _approve(client, approval_id)
+
+        # A clear, logged JSON 503, not a bare 500; the decision is saved, the workflow is not done.
+        assert failed.status_code == 503
+        assert failed.json()["code"] == "resume_failed"
+        [logged] = [r for r in caplog.records if r.getMessage() == "approval.resume_failed"]
+        assert logged.exc_info is not None
+        saved = _approval(settings, approval_id)
+        assert (saved.status, saved.decided_by, saved.resumed_at) == ("approved", "desk-1", None)
+        assert bookings.status(7) == "confirmed"
+        detail = client.get(f"/api/v1/conversations/{conversation_id}").json()
+        assert detail["status"] == "awaiting_approval"
+
+        bookings.cancel_error = None
+        retried = _approve(client, approval_id)
+
+        # The retry really finishes the job: the booking is cancelled (not just marked resumed),
+        # and the patient hears the outcome, not the stale "I've asked our staff" message.
+        assert retried.status_code == 200
+        assert retried.json()["patient_message"] == f"Your appointment {LABEL} has been cancelled."
+        assert bookings.status(7) == "cancelled"
+        assert bookings.cancel_calls == [7, 7]  # first attempt failed, second succeeded
+        assert _approval(settings, approval_id).resumed_at is not None
+        assert harness.paused_at(conversation_id) == ()
+        detail = client.get(f"/api/v1/conversations/{conversation_id}").json()
+        assert detail["status"] == "active"
+        assert detail["messages"][-1]["text"] == retried.json()["patient_message"]
+
+
+def test_after_a_failed_resume_a_different_decision_is_still_409(
+    settings: Settings, bookings: FakeBookings
+) -> None:
+    with running_app(settings, bookings) as (client, _):
+        _, approval_id = _request_cancellation(client)
+        bookings.cancel_error = RuntimeError("booking service timed out")
+        assert _approve(client, approval_id).status_code == 503
+        bookings.cancel_error = None
+
+        rejected = client.post(f"/api/v1/approvals/{approval_id}/reject", json=DECISION)
+
+        assert rejected.status_code == 409  # the saved decision (approve) is final
+        assert rejected.json()["code"] == "already_decided"
+        assert bookings.status(7) == "confirmed"
+        assert _approve(client, approval_id).status_code == 200  # ...and can still be finished
+        assert bookings.status(7) == "cancelled"
+
+
+def test_repeating_the_same_decision_after_success_is_409_and_applies_nothing_twice(
+    settings: Settings, bookings: FakeBookings
+) -> None:
+    with running_app(settings, bookings) as (client, _):
+        _, approval_id = _request_cancellation(client)
+        assert _approve(client, approval_id).status_code == 200
+
+        again = _approve(client, approval_id)
+
+        assert again.status_code == 409
+        assert again.json()["code"] == "already_decided"
+        assert bookings.cancel_calls == [7]
+
+
+def test_startup_reconcile_finishes_a_resume_that_failed(
+    settings: Settings, bookings: FakeBookings
+) -> None:
+    with running_app(settings, bookings) as (client, _):
+        conversation_id, approval_id = _request_cancellation(client)
+        bookings.cancel_error = RuntimeError("booking service timed out")
+        assert _approve(client, approval_id).status_code == 503
+    bookings.cancel_error = None
+
+    with running_app(settings, bookings) as (client, harness):  # startup runs the reconcile
+        assert bookings.status(7) == "cancelled"
+        assert harness.paused_at(conversation_id) == ()
+        assert _messages(client, conversation_id)[-1]["text"].endswith("has been cancelled.")
+
+    assert _approval(settings, approval_id).resumed_at is not None
+
+
+# --- A malformed date from the intent step --------------------------------------------------
+
+
+@pytest.mark.parametrize("target_date", ["not-a-date", "2026-13-45", "tomorrow"])
+def test_malformed_target_date_asks_for_the_date_instead_of_failing(
+    settings: Settings, bookings: FakeBookings, target_date: str
+) -> None:
+    with running_app(settings, bookings) as (client, harness):
+        harness.target_date_override = target_date  # CFD-07 extracts the date with an LLM
+        body = _say(client, _start(client), CANCEL)
+
+        assert body["outcome"] == "cancel_needs_date"
+        assert body["status"] == "active"
+        assert "which day" in body["reply"].lower()
+        assert "approval_id" not in body
+        assert _pending(client) == []
+        assert bookings.status(7) == "confirmed"
+
+
+@pytest.mark.parametrize(
+    ("error", "code"),
+    [
+        (WorkflowUnavailable("the workflow is not available"), "workflow_unavailable"),
+        (psycopg.OperationalError("server closed the connection"), "database_unavailable"),
+    ],
+)
+def test_resume_errors_that_are_already_503s_keep_their_code(
+    settings: Settings, bookings: FakeBookings, error: Exception, code: str
+) -> None:
+    with running_app(settings, bookings) as (client, _):
+        _, approval_id = _request_cancellation(client)
+        bookings.cancel_error = error
+
+        failed = _approve(client, approval_id)
+
+        assert failed.status_code == 503
+        assert failed.json()["code"] == code
+        assert _approval(settings, approval_id).resumed_at is None  # saved, not finished
+        bookings.cancel_error = None
+        assert _approve(client, approval_id).status_code == 200  # the same retry finishes it

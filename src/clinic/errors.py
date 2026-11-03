@@ -53,6 +53,14 @@ class AlreadyDecided(AppError):
     code = "already_decided"
 
 
+class ResumeFailed(AppError):
+    """The staff decision is saved, but resuming the conversation failed. Retrying the same
+    decision finishes the job."""
+
+    status_code = 503
+    code = "resume_failed"
+
+
 _HTTP_CODES = {404: "not_found", 405: "method_not_allowed"}
 
 

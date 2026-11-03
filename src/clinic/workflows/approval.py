@@ -29,6 +29,7 @@ CANCEL_NOT_FOUND = (
     "the front desk."
 )
 ASK_WHICH = "You have {count} appointments{on_day}: {labels}. Which one would you like to cancel?"
+ASK_DATE = "I couldn't understand the date. Which day is the appointment you want to cancel?"
 ALREADY_WAITING = (
     "A cancellation of your appointment {label} is already waiting for staff approval. "
     "I'll message you here when they decide."
@@ -98,10 +99,13 @@ class ApprovalNodes:
     def cancel(self, state: ApprovalState) -> dict[str, object]:
         """Find the one booking to cancel, or answer without asking staff."""
         target = state.get("target_date")
+        try:
+            on_date = date.fromisoformat(target) if target else None
+        except ValueError:
+            # The date comes from the intent step (an LLM), so it is not trusted: ask the patient.
+            return _answered(ASK_DATE, "cancel_needs_date")
         on_day = f" on {target}" if target else ""
-        matches = self._bookings.find_confirmed(
-            state["patient_ref"], date.fromisoformat(target) if target else None
-        )
+        matches = self._bookings.find_confirmed(state["patient_ref"], on_date)
         if not matches:
             return _answered(CANCEL_NOT_FOUND.format(on_day=on_day), "cancel_not_found")
         if len(matches) > 1:
@@ -211,7 +215,11 @@ class CheckpointedGraph(Protocol):
 
 
 class GraphApprovalResumer:
-    """Resumes the conversation graph paused at `await_approval` with Command(resume=...)."""
+    """Resumes the conversation graph paused at `await_approval` with Command(resume=...).
+
+    Safe to call again for the same approval: it looks at where the saved checkpoint stands, so a
+    decision is never applied twice and a half-finished resume is completed.
+    """
 
     def __init__(self, graph: CheckpointedGraph) -> None:
         self._graph = graph
@@ -222,12 +230,20 @@ class GraphApprovalResumer:
         config: RunnableConfig = {"configurable": {"thread_id": conversation_id}}
         snapshot = self._graph.get_state(config)
         if "await_approval" in snapshot.next:
+            # Still paused: hand the decision to the graph.
             if snapshot.values.get("approval_id") != approval_id:
                 raise RuntimeError("the conversation is waiting for a different approval")
             values = self._graph.invoke(
                 Command(resume={"decision": decision, "reason": reason}), config
             )
+        elif snapshot.next:
+            # The decision was handed over, but a later node failed (for example `apply_decision`
+            # could not cancel the booking). The checkpoint is saved just before that node, so
+            # invoking with no input runs the remaining nodes. Returning the stored values here
+            # would be wrong: they still hold the "waiting for approval" reply.
+            values = self._graph.invoke(None, config)
         else:
-            # Already resumed before a crash: do not apply the decision a second time.
+            # The graph already finished (the process died before the bookkeeping): do not apply
+            # the decision a second time.
             values = snapshot.values
         return ApprovalOutcome(reply=str(values["reply"]), outcome=str(values["outcome"]))

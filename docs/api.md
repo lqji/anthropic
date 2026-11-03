@@ -72,7 +72,13 @@ Decide an approval. The paused conversation resumes and the patient is told the 
 - `200`: `{"approval_id": "<uuid>", "status": "approved" | "rejected", "patient_message": "..."}`.
   `patient_message` is also stored as an assistant message in the conversation.
 - `404 not_found`: unknown id.
-- `409 already_decided`: the approval was already approved or rejected.
+- `409 already_decided`: the approval was already approved or rejected and the conversation has
+  resumed, or it was decided the other way. A decision is final once saved.
+- `503 resume_failed`: the decision **is saved**, but resuming the conversation failed (logged
+  as `approval.resume_failed`). The conversation stays `awaiting_approval`. Repeat the **same**
+  call (the same decision) to finish the job: the saved `decided_by` and `reason` are kept, and
+  the decision is applied once. A different decision gets `409 already_decided`. If nobody
+  retries, the conversation is resumed at the next service start.
 - `409 conversation_busy`: the conversation is handling a message right now. The approval stays
   pending; try again.
 - `422 validation_error`: blank `decided_by` or a `reason` under 3 characters. The approval stays

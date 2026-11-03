@@ -49,12 +49,14 @@ class FakeBooking:
 
 @dataclass
 class FakeBookings:
-    """Implements BookingPort. `gate` pauses `cancel` (to hold the conversation lock)."""
+    """Implements BookingPort. `gate` pauses `cancel` (to hold the conversation lock);
+    `cancel_error` makes `cancel` fail."""
 
     bookings: dict[int, FakeBooking] = field(default_factory=dict)
     cancel_calls: list[int] = field(default_factory=list)
     entered: threading.Event = field(default_factory=threading.Event)
     gate: threading.Event | None = None
+    cancel_error: Exception | None = None
 
     def add(self, booking_id: int, label: str, on: str = TOMORROW, patient: str = PATIENT) -> None:
         self.bookings[booking_id] = FakeBooking(patient, date.fromisoformat(on), label)
@@ -73,6 +75,8 @@ class FakeBookings:
         self.entered.set()
         if self.gate is not None:
             self.gate.wait(10)
+        if self.cancel_error is not None:
+            raise self.cancel_error
         self.bookings[booking_id].status = "cancelled"
 
     def status(self, booking_id: int) -> str:
@@ -83,6 +87,7 @@ class Harness:
     def __init__(self, saver: PostgresSaver, pool: ConnectionPool, bookings: FakeBookings) -> None:
         self.bookings = bookings
         self.route_calls = 0
+        self.target_date_override: str | None = None  # feeds the graph a malformed date
         self.patient_ref = (
             PATIENT  # who the next turn is from (CFD-05 reads it from the conversation)
         )
@@ -107,7 +112,8 @@ class Harness:
         self.route_calls += 1
         text = state["text"].lower()
         if "cancel" in text:
-            return {"intent": "cancel", "target_date": TOMORROW if "tomorrow" in text else None}
+            target = self.target_date_override or (TOMORROW if "tomorrow" in text else None)
+            return {"intent": "cancel", "target_date": target}
         reply = f"echo: {state['text']}"
         return {"intent": "other", "reply": reply, "outcome": "answered", "status": "active"}
 
