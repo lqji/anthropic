@@ -128,6 +128,7 @@ for attempt in 1 2; do
   [ "$(field '.outcome')" = slot_taken ] && [ "$attempt" = 1 ] && continue
   break
 done
+[ "$(field '.outcome')" != slot_taken ] || fail "book" "the offered slot was taken twice in a row; run the smoke test again"
 expect_field "book" '.outcome' booked
 case "$(field '.reply')" in
   *"$DOCTOR_NAME"*) ;;
