@@ -32,6 +32,11 @@ conversation lock and without the workflow or the LLM, so it works even while an
 being handled (no 409) or the LLM is down (no 503). The conversation status is unchanged, and the
 message is flagged for staff (see below).
 
+The instruction needs no database. If the database is down or saving fails, the patient still gets
+the instruction (status 200), nothing is stored (the save is one transaction) and the error is
+logged as `emergency.persist_failed` with the rule name only. A conversation id that does not
+exist is still `404 not_found`.
+
 ### `GET /api/v1/conversations/{id}`
 Read a conversation back, with all its messages oldest first.
 

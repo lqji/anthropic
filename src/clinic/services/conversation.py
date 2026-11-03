@@ -62,25 +62,26 @@ class ConversationService:
             return conversation, messages.list_for(conn, cid)
 
     def handle_message(self, conversation_id: str, text: str) -> TurnResult:
-        """404 if unknown; an emergency is answered at once; 409 if another message is in
-        progress; else run the turn and store it.
+        """An emergency is answered at once; else 404 if unknown, 409 if another message is in
+        progress, else run the turn and store it.
 
-        The emergency check comes before the lock and the workflow, so an emergency is answered
-        even while another turn holds the lock or the LLM is down.
+        The emergency check comes first of all, before the conversation lookup, the lock and the
+        workflow, so an emergency is answered even while another turn holds the lock, the LLM is
+        down or the database is unreachable (it still gives 404 for a conversation that does
+        not exist).
 
         No database connection is held while the workflow runs (it may call the LLM), so slow
         turns cannot exhaust the pool. The patient message and the reply are stored together,
         only after the workflow succeeded: a failed turn stores nothing, so a retry is clean.
         """
         cid = _parse_id(conversation_id)
-        with self._pool.connection() as conn:
-            conversation = conversations.get(conn, cid)
-        if conversation is None:
-            raise NotFound("conversation not found")
-
-        emergency = self._emergency.check(cid, text, conversation.status)
+        emergency = self._emergency.check(cid, text)
         if emergency is not None:
             return emergency
+
+        with self._pool.connection() as conn:
+            if conversations.get(conn, cid) is None:
+                raise NotFound("conversation not found")
 
         with self._locks.hold(str(cid)):
             result = self._paused_reply(cid) or self._workflow.run_turn(str(cid), text)

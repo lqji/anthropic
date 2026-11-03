@@ -17,6 +17,15 @@ EMERGENCIES = [
     ("my son is struggling to breathe", "breathing"),
     ("She's not breathing", "breathing"),
     ("Baby is choking, help", "breathing"),
+    ("I'm short of breath", "breathing"),
+    ("Shortness of breath since this morning", "breathing"),
+    ("I'm having trouble breathing", "breathing"),
+    ("I couldn't breathe last night", "breathing"),
+    ("I can't get my breath", "breathing"),
+    ("My husband can’t catch his breath", "breathing"),
+    ("Her breathing is difficult", "breathing"),
+    ("Mum can´t breathe", "breathing"),  # acute accent used as an apostrophe
+    ("I can′t breathe", "breathing"),  # prime used as an apostrophe
     ("My throat is swelling after eating peanuts", "allergic_reaction"),
     ("I think it's anaphylaxis", "allergic_reaction"),
     ("His face is drooping and he has slurred speech", "stroke"),
@@ -50,6 +59,29 @@ ROUTINE = [
     "I passed my driving test, can I get the medical form signed?",
     "Do you accept cash or card?",
     "Can my mother come with me to the consultation?",
+    "Can I book a breathing exercise class?",
+    "Do you offer a breath test for H. pylori?",
+    "Is a spirometry breathing test covered by my insurance?",
+    "I need a short appointment next week",
+    "I can't make it tomorrow, can I cancel?",
+    "I won't be able to come on Sunday",
+]
+
+# Every apostrophe-like character that can stand in for ' in "can't".
+APOSTROPHE_LIKE = [
+    "'",
+    "‘",
+    "’",
+    "‛",
+    "ʼ",
+    "ʹ",
+    "´",
+    "′",
+    "‵",
+    "ˊ",
+    "ˋ",
+    "＇",
+    "`",
 ]
 
 
@@ -88,3 +120,19 @@ def test_normalise() -> None:
     assert normalise("I CAN’T   breathe!!!") == "i cant breathe"
     assert normalise("I can not breathe") == "i cant breathe"
     assert normalise("chest-pain") == "chest pain"
+
+
+@pytest.mark.parametrize("apostrophe", APOSTROPHE_LIKE)
+def test_every_apostrophe_variant_is_caught(apostrophe: str) -> None:
+    assert match_emergency(f"I can{apostrophe}t breathe") == "breathing"
+    assert match_emergency(f"She couldn{apostrophe}t breathe") == "breathing"
+
+
+@pytest.mark.parametrize("text", ["I can t breathe", "I can-t breathe", "I can‑t breathe"])
+def test_unknown_apostrophe_lookalike_still_reads_as_cant(text: str) -> None:
+    # An apostrophe-like character we did not list turns into a space; "can t" is read as "cant".
+    assert match_emergency(text) == "breathing"
+
+
+def test_normalise_apostrophe_variants() -> None:
+    assert normalise("can´t") == normalise("can′t") == normalise("can't") == "cant"

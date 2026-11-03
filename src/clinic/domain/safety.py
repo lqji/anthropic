@@ -23,9 +23,12 @@ _RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
     (
         "breathing",
         (
-            r"cant (?:breathe|breath)",
+            r"(?:cant|couldnt) (?:breathe|breath)",
+            rf"cant (?:get|catch) (?:{_PERSON}|a|any|some) breath",
             r"(?:struggling|unable|hard|difficult) to (?:breathe|breath)",
-            r"difficulty breathing",
+            r"(?:difficulty|trouble) breathing",
+            r"breathing (?:is |was )?(?:hard|difficult|laboured|labored)",
+            r"short(?:ness)? of breath",
             r"(?:not|stopped) breathing",
             r"gasping for (?:air|breath)",
             r"choking",
@@ -106,15 +109,22 @@ _COMPILED: tuple[tuple[str, re.Pattern[str]], ...] = tuple(
 
 RULE_NAMES: tuple[str, ...] = tuple(name for name, _ in _RULES)
 
-_APOSTROPHES = re.compile(r"['‘’ʼ`]")
+# Every apostrophe-like character: ' ‘ ’ ‛ ʼ ʹ ´ ′ ‵ ˊ ˋ ＇ and the backtick.
+_APOSTROPHES = re.compile("['‘’‛ʼʹ´′‵ˊˋ＇`]")
 _NON_WORD = re.compile(r"[^a-z0-9]+")
 _CANNOT = re.compile(r"\b(?:cannot|can not)\b")
+# "can't" typed with a character that is not listed above (or with a space) ends up as "can t".
+_SPLIT_CONTRACTION = re.compile(r"\b(can|couldn|won) t\b")
 
 
 def normalise(text: str) -> str:
-    """Lowercase, drop apostrophes (can't -> cant), turn punctuation into spaces, collapse runs."""
+    """Lowercase, drop apostrophes (can't -> cant), turn punctuation into spaces, collapse runs.
+
+    "cannot", "can not" and a split "can t" all read as "cant".
+    """
     text = _APOSTROPHES.sub("", text.lower())
     text = _NON_WORD.sub(" ", text).strip()
+    text = _SPLIT_CONTRACTION.sub(r"\1t", text)
     return _CANNOT.sub("cant", text)
 
 

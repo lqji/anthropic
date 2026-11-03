@@ -3,11 +3,13 @@
 import logging
 from uuid import UUID
 
+import psycopg
 from psycopg_pool import ConnectionPool
 
 from clinic.clock import Clock
 from clinic.domain.safety import match_emergency
-from clinic.repositories import emergencies, messages
+from clinic.errors import NotFound
+from clinic.repositories import conversations, emergencies, messages
 from clinic.repositories.emergencies import EmergencyRow
 from clinic.services.turn import TurnResult
 
@@ -26,33 +28,48 @@ class EmergencyService:
         self._clock = clock
         self._emergency_number = emergency_number
 
-    def check(self, conversation_id: UUID, text: str, status: str) -> TurnResult | None:
+    def check(self, conversation_id: UUID, text: str) -> TurnResult | None:
         """None for a routine message. For an emergency: store the patient message, the staff
         flag and the instruction in one transaction, and return the instruction.
 
         Deterministic rules only; it takes no conversation lock and never calls the workflow,
-        so it answers even while another turn is running or the LLM is down.
+        so it answers even while another turn is running or the LLM is down. The instruction
+        needs no database either: if the database is down or the write fails, the error is
+        logged and the patient still gets the instruction (nothing is half-saved, the
+        transaction rolls back). Only a conversation that does not exist is an error (404).
         """
         rule = match_emergency(text)
         if rule is None:
             return None
 
         reply = EMERGENCY_REPLY.format(number=self._emergency_number)
-        now = self._clock.now()
-        with self._pool.connection() as conn:
-            messages.add(conn, conversation_id, "patient", text, now)
-            emergencies.create(conn, conversation_id, rule, text[:EXCERPT_CHARS], now)
-            messages.add(
-                conn,
-                conversation_id,
-                "assistant",
-                reply,
-                now,
-                intent="emergency",
-                outcome="emergency",
+        status = "active"  # the real status is unknown if the database cannot be read
+        try:
+            with self._pool.connection() as conn:
+                conversation = conversations.get(conn, conversation_id)
+                if conversation is None:
+                    raise NotFound("conversation not found")
+                status = conversation.status
+                now = self._clock.now()
+                messages.add(conn, conversation_id, "patient", text, now)
+                emergencies.create(conn, conversation_id, rule, text[:EXCERPT_CHARS], now)
+                messages.add(
+                    conn,
+                    conversation_id,
+                    "assistant",
+                    reply,
+                    now,
+                    intent="emergency",
+                    outcome="emergency",
+                )
+        except psycopg.Error as exc:  # includes pool timeouts and a closed pool
+            # The rule name and error type only: patient text never goes to the logs.
+            logger.error(
+                "emergency.persist_failed",
+                extra={"fields": {"matched_rule": rule, "error": type(exc).__name__}},
             )
-        # The rule name only: patient text never goes to the logs.
-        logger.warning("emergency.flagged", extra={"fields": {"matched_rule": rule}})
+        else:
+            logger.warning("emergency.flagged", extra={"fields": {"matched_rule": rule}})
         return TurnResult(reply=reply, intent="emergency", outcome="emergency", status=status)
 
     def list_by_status(self, status: str) -> list[EmergencyRow]:

@@ -1,3 +1,4 @@
+import logging
 import threading
 import time
 from collections.abc import Callable, Iterator
@@ -11,6 +12,7 @@ from fastapi.testclient import TestClient
 from clinic.app import create_app
 from clinic.config import Settings
 from clinic.errors import LLMUnavailable
+from clinic.repositories import emergencies as emergencies_repository
 from tests.test_conversation_api import SEED_DIR, FakeWorkflow
 
 EMERGENCY_NUMBER = "1234"  # not the default, so the reply must come from settings
@@ -160,4 +162,62 @@ def test_emergency_on_unknown_conversation_is_404(client: TestClient) -> None:
     response = client.post(_url(str(uuid4())), json={"text": CHEST_PAIN})
 
     assert response.status_code == 404
+    assert client.get("/api/v1/emergencies").json() == []
+
+
+# --- Persistence failures: the patient still gets the instruction ---------------------------
+
+
+def _persist_failures(caplog: pytest.LogCaptureFixture) -> list[logging.LogRecord]:
+    return [r for r in caplog.records if r.getMessage() == "emergency.persist_failed"]
+
+
+def test_emergency_still_answered_when_the_database_is_down(
+    make_settings: Callable[..., Settings], caplog: pytest.LogCaptureFixture
+) -> None:
+    workflow = FakeWorkflow()
+    # make_settings defaults to an unreachable database; a 1 s pool timeout keeps the test short.
+    settings = make_settings(
+        db_pool_timeout_s=1, clinic_docs_dir=SEED_DIR, emergency_number=EMERGENCY_NUMBER
+    )
+    url = f"/api/v1/conversations/{uuid4()}/messages"
+
+    with TestClient(create_app(settings, workflow)) as client:
+        with caplog.at_level(logging.WARNING):
+            emergency = client.post(url, json={"text": CHEST_PAIN})
+            routine = client.post(url, json={"text": "What are your opening hours?"})
+
+    assert emergency.status_code == 200
+    body = emergency.json()
+    assert EMERGENCY_NUMBER in body["reply"]
+    assert body["outcome"] == "emergency"
+    assert workflow.calls == []
+    assert routine.status_code == 503  # nothing else works without the database
+    [failure] = _persist_failures(caplog)
+    assert failure.levelno == logging.ERROR
+    assert failure.__dict__["fields"]["matched_rule"] == "chest_pain"
+    # The rule name only: patient text never goes to the logs.
+    assert all(CHEST_PAIN not in str(r.__dict__) for r in caplog.records)
+
+
+def test_emergency_still_answered_when_saving_fails_and_nothing_is_half_saved(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    conversation_id = _start(client)
+
+    def broken_create(*args: object, **kwargs: object) -> None:
+        raise psycopg.OperationalError("server closed the connection unexpectedly")
+
+    monkeypatch.setattr(emergencies_repository, "create", broken_create)
+    with caplog.at_level(logging.WARNING):
+        response = client.post(_url(conversation_id), json={"text": CHEST_PAIN})
+    monkeypatch.undo()
+
+    assert response.status_code == 200
+    assert EMERGENCY_NUMBER in response.json()["reply"]
+    assert len(_persist_failures(caplog)) == 1
+    # One transaction: the patient message written before the failure was rolled back.
+    assert client.get(f"/api/v1/conversations/{conversation_id}").json()["messages"] == []
     assert client.get("/api/v1/emergencies").json() == []
