@@ -72,4 +72,9 @@ last `HISTORY_WINDOW` messages at most, starting with a patient message.
 On every start the lifespan runs `sql/*.sql` and `PostgresSaver.setup()` (both idempotent; setup
 uses its own autocommit connection). The graph's saver uses a separate pool with autocommit and
 dict rows, so the app pool keeps one-block-one-transaction semantics. If the database is down at
-start, this is logged as `startup.database_unavailable` and `/health` reports 503.
+start, this is logged as `startup.database_unavailable`, `/health` reports 503, and a background
+thread retries every 5 s until it succeeds (`startup.database_prepared_after_retry`). Any other
+error is logged as `startup.database_prepare_failed` and retrying stops.
+
+`finalize` raises `MissingReplyError` if a turn reaches it without a `reply`: a node that forgets
+to answer fails loudly instead of being hidden behind a generic message.

@@ -1,6 +1,8 @@
 """PostgresSaver checkpointing on a real PostgreSQL: restart, setup, and the history window."""
 
 import logging
+import threading
+import time
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from uuid import uuid4
@@ -11,9 +13,10 @@ from fastapi.testclient import TestClient
 from langchain_core.messages import HumanMessage
 from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.postgres import PostgresSaver
-from psycopg.conninfo import make_conninfo
+from psycopg.conninfo import conninfo_to_dict, make_conninfo
 
-from clinic.app import create_app
+from clinic import app as app_module
+from clinic.app import create_app, keep_preparing
 from clinic.config import Settings
 from clinic.db import make_checkpoint_pool
 from clinic.workflows.checkpointer import setup_checkpointer
@@ -37,21 +40,31 @@ def settings(make_settings: Callable[..., Settings], database_url: str) -> Setti
     return make_settings(database_url=database_url, history_window=10)
 
 
-@pytest.fixture
-def fresh_database_url(database_url: str) -> Iterator[str]:
-    """A brand-new, empty database on the test server, dropped afterwards."""
-    name = f"cfd05_{uuid4().hex}"
+def _admin(database_url: str, statement: str, name: str) -> None:
+    """Run CREATE/DROP DATABASE `name` on the test server (cannot run inside a transaction)."""
     with psycopg.connect(database_url, autocommit=True, connect_timeout=5) as admin:
-        admin.execute(psycopg.sql.SQL("CREATE DATABASE {}").format(psycopg.sql.Identifier(name)))
+        admin.execute(psycopg.sql.SQL(statement).format(psycopg.sql.Identifier(name)))
+
+
+@pytest.fixture
+def missing_database_url(database_url: str) -> Iterator[str]:
+    """URL of a database that does not exist yet (connecting fails); dropped afterwards."""
+    name = f"cfd05_{uuid4().hex}"
     try:
         yield make_conninfo(database_url, dbname=name)
     finally:
-        with psycopg.connect(database_url, autocommit=True, connect_timeout=5) as admin:
-            admin.execute(
-                psycopg.sql.SQL("DROP DATABASE IF EXISTS {} WITH (FORCE)").format(
-                    psycopg.sql.Identifier(name)
-                )
-            )
+        _admin(database_url, "DROP DATABASE IF EXISTS {} WITH (FORCE)", name)
+
+
+@pytest.fixture
+def fresh_database_url(database_url: str, missing_database_url: str) -> str:
+    """A brand-new, empty database on the test server, dropped afterwards."""
+    _admin(database_url, "CREATE DATABASE {}", _dbname(missing_database_url))
+    return missing_database_url
+
+
+def _dbname(url: str) -> str:
+    return str(conninfo_to_dict(url)["dbname"])
 
 
 @contextmanager
@@ -156,6 +169,56 @@ def test_api_starts_with_the_database_down_and_logs_it(
     assert [r.getMessage() for r in caplog.records if r.name == "clinic.startup"] == [
         "startup.database_unavailable"
     ]
+
+
+def test_tables_are_created_when_the_database_comes_up_after_the_api(
+    database_url: str,
+    missing_database_url: str,
+    make_settings: Callable[..., Settings],
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    monkeypatch.setattr(app_module, "PREPARE_RETRY_S", 0.1)
+    settings = make_settings(database_url=missing_database_url, db_pool_timeout_s=1)
+
+    with caplog.at_level(logging.INFO, logger="clinic.startup"):
+        with TestClient(create_app(settings)) as client:
+            assert client.get("/health").status_code == 503  # database not there yet
+            _admin(database_url, "CREATE DATABASE {}", _dbname(missing_database_url))
+            deadline = time.monotonic() + 15
+            while time.monotonic() < deadline and not _logged(
+                caplog, "startup.database_prepared_after_retry"
+            ):
+                time.sleep(0.1)
+
+    assert _logged(caplog, "startup.database_unavailable")
+    assert _logged(caplog, "startup.database_prepared_after_retry")
+    assert CHECKPOINT_TABLES | {"conversations", "messages"} <= _tables(missing_database_url)
+
+
+def test_retry_stops_on_an_error_that_will_not_fix_itself(
+    make_settings: Callable[..., Settings],
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    calls: list[Settings] = []
+
+    def broken_prepare(settings: Settings) -> bool:
+        calls.append(settings)
+        raise ValueError("bad migration")
+
+    monkeypatch.setattr(app_module, "PREPARE_RETRY_S", 0.01)
+    monkeypatch.setattr(app_module, "prepare_database", broken_prepare)
+
+    with caplog.at_level(logging.ERROR, logger="clinic.startup"):
+        keep_preparing(make_settings(), threading.Event())  # returns instead of looping
+
+    assert len(calls) == 1
+    assert _logged(caplog, "startup.database_prepare_failed")
+
+
+def _logged(caplog: pytest.LogCaptureFixture, message: str) -> bool:
+    return any(r.getMessage() == message for r in caplog.records)
 
 
 # --- AC3: 30 messages, a window of 10, the checkpoint keeps everything ----------------------

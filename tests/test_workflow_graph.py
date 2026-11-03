@@ -12,6 +12,7 @@ from clinic.workflows.graph import build_graph
 from clinic.workflows.history import history_window
 from clinic.workflows.nodes import NODES
 from clinic.workflows.nodes._stub import NOT_IMPLEMENTED, NOT_IMPLEMENTED_REPLY
+from clinic.workflows.nodes.safety import MissingReplyError
 from clinic.workflows.routing import route_intent, route_start
 from clinic.workflows.state import INTENTS, ConversationState, new_turn
 
@@ -55,7 +56,7 @@ def test_every_graph_node_is_a_stub_with_the_state_signature(
         assert list(inspect.signature(node).parameters) == ["state"], name
         assert hints["state"] is ConversationState, name
         assert hints["return"] == dict[str, object], name
-        assert isinstance(node(new_turn("hello")), dict), name
+        assert isinstance(node({**new_turn("hello"), "reply": "ok"}), dict), name
 
 
 def test_a_turn_runs_end_to_end_with_an_honest_fallback(
@@ -68,6 +69,22 @@ def test_a_turn_runs_end_to_end_with_an_honest_fallback(
     assert result["outcome"] == NOT_IMPLEMENTED
     assert [type(m) for m in result["messages"]] == [HumanMessage, AIMessage]
     assert result["messages"][-1].text == NOT_IMPLEMENTED_REPLY
+
+
+@pytest.mark.parametrize("missing", [{}, {"reply": "   "}])
+def test_a_turn_without_a_reply_fails_loudly(
+    make_settings: Callable[..., Settings],
+    monkeypatch: pytest.MonkeyPatch,
+    missing: dict[str, object],
+) -> None:
+    def forgetful_clarify(state: ConversationState) -> dict[str, object]:
+        return missing
+
+    monkeypatch.setitem(NODES, "clarify", forgetful_clarify)
+    graph = build_graph(make_settings(), None)
+
+    with pytest.raises(MissingReplyError):
+        graph.invoke(new_turn("hello"))
 
 
 def test_new_turn_clears_the_per_turn_fields() -> None:

@@ -1,4 +1,5 @@
 import logging
+import threading
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
@@ -21,6 +22,8 @@ from clinic.workflows.graph import build_graph
 
 logger = logging.getLogger("clinic.startup")
 
+PREPARE_RETRY_S = 5.0
+
 
 def prepare_database(settings: Settings) -> bool:
     """Create the app tables and the checkpoint tables. True when done.
@@ -41,12 +44,39 @@ def prepare_database(settings: Settings) -> bool:
     return True
 
 
+def keep_preparing(settings: Settings, stop: threading.Event) -> None:
+    """Retry `prepare_database` until it succeeds or the app shuts down.
+
+    Only an unreachable database is retried. Any other error (SQL bug, failed migration) will not
+    fix itself: it is logged with its traceback and retrying stops, as it would stop a first start.
+    """
+    while not stop.wait(PREPARE_RETRY_S):
+        try:
+            prepared = prepare_database(settings)
+        except Exception:
+            logger.exception("startup.database_prepare_failed")
+            return
+        if prepared:
+            logger.info("startup.database_prepared_after_retry")
+            return
+
+
 def create_app(settings: Settings) -> FastAPI:
     configure_logging()
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-        prepare_database(settings)
+        stop_retry = threading.Event()
+        retry: threading.Thread | None = None
+        if not prepare_database(settings):
+            # The database may come up after the api: keep trying in the background.
+            retry = threading.Thread(
+                target=keep_preparing,
+                args=(settings, stop_retry),
+                name="prepare-database",
+                daemon=True,
+            )
+            retry.start()
         pool = make_pool(settings)
         checkpoint_pool = make_checkpoint_pool(settings)
         # Do not wait for the first connection: /health must be able to report a down database.
@@ -62,6 +92,9 @@ def create_app(settings: Settings) -> FastAPI:
         try:
             yield
         finally:
+            stop_retry.set()
+            if retry is not None:
+                retry.join(timeout=10)
             checkpoint_pool.close(timeout=5)
             pool.close(timeout=5)
 
