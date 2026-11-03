@@ -118,7 +118,9 @@ endpoint can close. On a demo or staging system add it with `RUN_EMERGENCY=1 scr
 feature: health, a clinic question, a question the documents do not cover, a booking, a
 cancellation that waits for staff, and (with `RUN_EMERGENCY=1`) an emergency. It prints one `ok` line per check, stops at
 the first failure with the check name and the response, and exits 1 (it exits 0 only if every check
-passed). Run it after every deploy. If a check fails after the booking, the script cancels its own
+passed). Run it after every deploy. The booking and "not covered" checks follow how the model
+reads each message: they are exact with `LLM_PROVIDER=fake`, but with a real model a failure there
+needs a look at the response before you roll back. If a check fails after the booking, the script cancels its own
 test booking before it exits.
 
 The database lives in the `pgdata` volume, so a normal deploy keeps all data. **First deploy or a
@@ -134,7 +136,7 @@ tag may not contain the smoke test, so copy it out of the checkout first and run
 SMOKE="$(mktemp)" && cp scripts/smoke_test.sh "$SMOKE"
 git checkout <previous-tag>
 APP_VERSION=<previous-tag> docker compose up --build -d --wait
-bash "$SMOKE"
+bash "$SMOKE"; rm -f "$SMOKE"
 ```
 
 Both images stay on the VM (`docker image ls clinic-api`), so building the older tag again is fast
@@ -154,7 +156,7 @@ taken before the upgrade (**this discards everything saved since**). Save these 
 and run it with `bash -e restore.sh`, so that it stops at the first command that fails:
 
 ```bash
-SMOKE="$(mktemp)" && cp scripts/smoke_test.sh "$SMOKE"
+SMOKE="$(mktemp)" && trap 'rm -f "$SMOKE"' EXIT && cp scripts/smoke_test.sh "$SMOKE"
 # 1. Check the backup is complete, and keep the current data in case the restore fails.
 test -s backup-<date>.sql
 grep -q 'PostgreSQL database dump complete' backup-<date>.sql
