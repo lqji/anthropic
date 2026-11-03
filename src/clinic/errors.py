@@ -48,6 +48,11 @@ class WorkflowUnavailable(AppError):
     code = "workflow_unavailable"
 
 
+class AlreadyDecided(AppError):
+    status_code = 409
+    code = "already_decided"
+
+
 _HTTP_CODES = {404: "not_found", 405: "method_not_allowed"}
 
 

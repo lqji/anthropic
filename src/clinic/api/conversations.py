@@ -52,6 +52,7 @@ class TurnOut(BaseModel):
     intent: str
     outcome: str
     status: str
+    approval_id: str | None = None  # only present while waiting for staff approval
 
 
 def get_service(deps: Annotated[Deps, Depends(get_deps)]) -> ConversationService:
@@ -70,11 +71,15 @@ def start_conversation(body: StartConversation, service: Service) -> Conversatio
     )
 
 
-@router.post("/{conversation_id}/messages")
+@router.post("/{conversation_id}/messages", response_model_exclude_none=True)
 def send_message(conversation_id: str, body: SendMessage, service: Service) -> TurnOut:
     result = service.handle_message(conversation_id, body.text)
     return TurnOut(
-        reply=result.reply, intent=result.intent, outcome=result.outcome, status=result.status
+        reply=result.reply,
+        intent=result.intent,
+        outcome=result.outcome,
+        status=result.status,
+        approval_id=result.approval_id,
     )
 
 

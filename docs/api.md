@@ -49,3 +49,31 @@ Emergency flags for front-desk staff, newest first.
 - `200`: `[{"id": 1, "conversation_id": "<uuid>", "matched_rule": "chest_pain", "excerpt": "...", "status": "open", "created_at": "..."}]`.
   `excerpt` is the first 200 characters of the patient's message.
 - `422 validation_error`: any other `status`.
+
+## Approvals (CFD-14)
+
+A cancellation (and, from CFD-15, a same-day booking) waits for front-desk staff. The message
+that asks for it gets `status: "awaiting_approval"` and an `approval_id`. The conversation is then
+paused: every non-emergency message gets a "still waiting" reply (`outcome: "still_waiting"`)
+until staff decide, while emergencies are still answered. The pause survives a restart.
+
+### `GET /api/v1/approvals?status=pending`
+Approvals for staff, oldest first.
+
+- `status`: `pending` (default), `approved` or `rejected`.
+- `200`: `[{"id": "<uuid>", "conversation_id": "<uuid>", "kind": "cancellation", "booking_id": 7, "status": "pending", "decided_by": null, "reason": null, "created_at": "...", "decided_at": null}]`
+- `422 validation_error`: any other `status`.
+
+### `POST /api/v1/approvals/{id}/approve` and `POST /api/v1/approvals/{id}/reject`
+Decide an approval. The paused conversation resumes and the patient is told the result.
+
+- Body: `{"decided_by": "desk-1", "reason": "..."}`. `decided_by` is 1 to 100 characters and
+  `reason` is 3 to 500 characters, both after trimming.
+- `200`: `{"approval_id": "<uuid>", "status": "approved" | "rejected", "patient_message": "..."}`.
+  `patient_message` is also stored as an assistant message in the conversation.
+- `404 not_found`: unknown id.
+- `409 already_decided`: the approval was already approved or rejected.
+- `409 conversation_busy`: the conversation is handling a message right now. The approval stays
+  pending; try again.
+- `422 validation_error`: blank `decided_by` or a `reason` under 3 characters. The approval stays
+  pending.

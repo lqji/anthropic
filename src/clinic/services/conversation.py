@@ -20,6 +20,11 @@ logger = logging.getLogger("clinic.conversation")
 # Must match the CHECK constraint on conversations.status (sql/01_conversations.sql).
 CONVERSATION_STATUSES = frozenset({"active", "awaiting_approval", "closed"})
 
+STILL_WAITING = (
+    "We're still waiting for our front-desk staff to decide on your request. "
+    "I'll message you here as soon as they do."
+)
+
 
 class ConversationWorkflow(Protocol):
     """Runs one turn of a conversation. CFD-05's LangGraph workflow implements this."""
@@ -112,9 +117,22 @@ class ConversationService:
         return result
 
     def _paused_reply(self, conversation_id: UUID) -> TurnResult | None:
-        """Hook for CFD-14: a conversation waiting for staff approval answers "still waiting"
-        without invoking the workflow. Until then no conversation is ever paused."""
-        return None
+        """While a conversation waits for staff approval, answer "still waiting" without
+        invoking the workflow (its graph is paused at `await_approval`).
+
+        Called under the conversation lock, which a staff decision also takes, so the status
+        read here cannot be overtaken by a decision.
+        """
+        with self._pool.connection() as conn:
+            conversation = conversations.get(conn, conversation_id)
+        if conversation is None or conversation.status != "awaiting_approval":
+            return None
+        return TurnResult(
+            reply=STILL_WAITING,
+            intent="still_waiting",
+            outcome="still_waiting",
+            status="awaiting_approval",
+        )
 
 
 def _parse_id(conversation_id: str) -> UUID:
