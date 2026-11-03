@@ -8,11 +8,16 @@ from uuid import UUID, uuid4
 import psycopg
 import pytest
 from fastapi.testclient import TestClient
+from psycopg import sql
+from psycopg.conninfo import make_conninfo
 
+from clinic import app as app_module
 from clinic.app import create_app
 from clinic.config import Settings
 from clinic.errors import LLMUnavailable
+from clinic.repositories import conversations as conversations_repository
 from clinic.repositories import messages as messages_repository
+from clinic.schema import apply_schema
 from clinic.services.conversation import TurnResult
 
 SEED_DIR = Path(__file__).resolve().parents[1] / "seed" / "clinic_docs"
@@ -354,3 +359,93 @@ def test_database_failure_while_storing_the_turn_is_503_and_stores_nothing(
     assert [r.getMessage() for r in caplog.records if r.name == "clinic.errors"] == [
         "database_unavailable"
     ]
+
+
+# --- The schema does not exist yet ----------------------------------------------------------
+
+
+@pytest.fixture
+def empty_database_url(database_url: str) -> Iterator[str]:
+    """A brand-new database with no tables, created and dropped inside the test."""
+    name = f"clinic_no_tables_{uuid4().hex[:8]}"
+    with psycopg.connect(database_url, autocommit=True, connect_timeout=5) as admin:
+        admin.execute(sql.SQL("CREATE DATABASE {}").format(sql.Identifier(name)))
+    try:
+        yield make_conninfo(database_url, dbname=name)
+    finally:
+        with psycopg.connect(database_url, autocommit=True, connect_timeout=5) as admin:
+            admin.execute(
+                sql.SQL("DROP DATABASE IF EXISTS {} WITH (FORCE)").format(sql.Identifier(name))
+            )
+
+
+@pytest.mark.parametrize(
+    ("method", "path", "body"),
+    [
+        ("POST", "/api/v1/conversations", {"patient_ref": "demo-patient-1"}),
+        ("POST", f"/api/v1/conversations/{uuid4()}/messages", {"text": "hello"}),
+        ("GET", f"/api/v1/conversations/{uuid4()}", None),
+    ],
+)
+def test_missing_tables_are_json_503_database_unavailable_and_logged(
+    make_settings: Callable[..., Settings],
+    empty_database_url: str,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    method: str,
+    path: str,
+    body: dict[str, str] | None,
+) -> None:
+    # The api started while the database was down, so the tables are still being created by the
+    # background retry. Turn that retry off: the tables stay missing.
+    monkeypatch.setattr(app_module, "prepare_database", lambda pool, settings: True)
+    settings = make_settings(database_url=empty_database_url, clinic_docs_dir=SEED_DIR)
+
+    with TestClient(create_app(settings, FakeWorkflow())) as client:
+        with caplog.at_level(logging.ERROR, logger="clinic.errors"):
+            response = client.request(method, path, json=body)
+
+    assert response.status_code == 503  # not a 500: this is "not ready yet", not a bug
+    assert response.headers["content-type"].startswith("application/json")
+    assert response.json()["code"] == "database_unavailable"
+    logged = [r for r in caplog.records if r.name == "clinic.errors"]
+    assert [r.getMessage() for r in logged] == ["database_not_ready"]
+    assert logged[0].__dict__["fields"] == {"error": "UndefinedTable"}
+
+
+def test_the_same_endpoint_works_once_the_tables_exist(
+    make_settings: Callable[..., Settings],
+    empty_database_url: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(app_module, "prepare_database", lambda pool, settings: True)
+    settings = make_settings(database_url=empty_database_url, clinic_docs_dir=SEED_DIR)
+
+    with TestClient(create_app(settings, FakeWorkflow())) as client:
+        before = client.post("/api/v1/conversations", json={"patient_ref": "demo-patient-1"})
+        with psycopg.connect(empty_database_url, autocommit=True, connect_timeout=5) as conn:
+            apply_schema(conn)  # what the background retry does once the database is reachable
+        after = client.post("/api/v1/conversations", json={"patient_ref": "demo-patient-1"})
+
+    assert before.status_code == 503
+    assert after.status_code == 201
+
+
+def test_any_other_sql_error_is_still_a_500(
+    make_settings: Callable[..., Settings],
+    database_url: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Only a missing table means "not ready yet". Any other SQL error is a bug, not a 503."""
+
+    def broken_create(*args: object, **kwargs: object) -> None:
+        raise psycopg.errors.UndefinedColumn("column does not exist")
+
+    monkeypatch.setattr(conversations_repository, "create", broken_create)
+    settings = make_settings(database_url=database_url, clinic_docs_dir=SEED_DIR)
+
+    with TestClient(create_app(settings, FakeWorkflow()), raise_server_exceptions=False) as client:
+        response = client.post("/api/v1/conversations", json={"patient_ref": "demo-patient-1"})
+
+    assert response.status_code == 500
+    assert response.json()["code"] == "internal_error"

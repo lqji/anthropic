@@ -3,6 +3,11 @@
 All endpoints are under `/api/v1`, take and return JSON, and are documented live at `/docs`.
 Every error has the body `{"code": "...", "detail": "...", "request_id": "..."}`.
 
+Every endpoint can return `503 database_unavailable` (logged): the database is unreachable, or it
+is **not ready yet**. The api starts even when the database is down at start and creates its
+tables in the background once the database is reachable; until then a request that needs a table
+gets this 503, and the same request works afterwards. Retry after a few seconds.
+
 ## Conversations (CFD-06)
 
 ### `POST /api/v1/conversations`
