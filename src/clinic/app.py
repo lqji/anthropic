@@ -24,9 +24,9 @@ from clinic.locks import ConversationLocks
 from clinic.observability import configure_logging, install_request_logging
 from clinic.rag.loader import KnowledgeLoader
 from clinic.schema import apply_schema
+from clinic.seed import seed_appointments
 from clinic.services.conversation import ConversationWorkflow
 from clinic.services.graph_workflow import GraphWorkflow
-from clinic.seed import seed_appointments
 from clinic.workflows.checkpointer import setup_checkpointer
 from clinic.workflows.deps import WorkflowDeps
 from clinic.workflows.graph import build_graph
@@ -109,8 +109,11 @@ def create_app(
     clock: Clock | None = None,
     workflow: ConversationWorkflow | None = None,
 ) -> FastAPI:
-    """`clock` defaults to the system clock; tests pass a FixedClock. Each conversation turn runs
-    through the checkpointed graph; `workflow` replaces it in tests that need a slow or failing turn."""
+    """`clock` defaults to the system clock; tests pass a FixedClock.
+
+    Each conversation turn runs through the checkpointed graph. `workflow` replaces it, in tests
+    that need a slow or failing turn.
+    """
     configure_logging()
     app_clock = clock or SystemClock()
 

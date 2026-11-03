@@ -21,7 +21,6 @@ from clinic.repositories import conversations as conversations_repository
 from clinic.repositories import messages as messages_repository
 from clinic.schema import apply_schema
 from clinic.services.conversation import TurnResult
-from clinic.workflows.nodes._stub import NOT_IMPLEMENTED_REPLY
 
 
 class FakeWorkflow:
@@ -65,7 +64,7 @@ def workflow() -> FakeWorkflow:
 
 @pytest.fixture
 def client(settings: Settings, database_url: str, workflow: FakeWorkflow) -> Iterator[TestClient]:
-    with TestClient(create_app(settings, workflow)) as test_client:
+    with TestClient(create_app(settings, workflow=workflow)) as test_client:
         with psycopg.connect(database_url, autocommit=True, connect_timeout=5) as conn:
             conn.execute("TRUNCATE conversations CASCADE")
         yield test_client
@@ -224,12 +223,12 @@ def test_get_returns_all_messages_in_order(client: TestClient) -> None:
 def test_second_app_instance_sees_the_same_messages_and_continues(
     settings: Settings, database_url: str
 ) -> None:
-    with TestClient(create_app(settings, FakeWorkflow())) as first_app:
+    with TestClient(create_app(settings, workflow=FakeWorkflow())) as first_app:
         conversation_id = _start(first_app)
         first_app.post(f"/api/v1/conversations/{conversation_id}/messages", json={"text": "one"})
 
     second_workflow = FakeWorkflow()
-    with TestClient(create_app(settings, second_workflow)) as second_app:
+    with TestClient(create_app(settings, workflow=second_workflow)) as second_app:
         before = second_app.get(f"/api/v1/conversations/{conversation_id}").json()["messages"]
         response = second_app.post(
             f"/api/v1/conversations/{conversation_id}/messages", json={"text": "two"}
@@ -272,7 +271,7 @@ def test_ten_conversations_messaged_at_once_all_200(
     workflow.barrier = threading.Barrier(10)
     settings = make_settings(database_url=database_url, db_pool_max_size=2)
 
-    with TestClient(create_app(settings, workflow)) as client:
+    with TestClient(create_app(settings, workflow=workflow)) as client:
         conversation_ids = [_start(client, f"patient-{n}") for n in range(10)]
         with ThreadPoolExecutor(max_workers=10) as pool:
             responses = list(
@@ -309,7 +308,7 @@ def test_database_down_is_json_503_database_unavailable_and_logged(
 ) -> None:
     # make_settings defaults to an unreachable database; a 1 s pool timeout keeps the test short.
     settings = make_settings(db_pool_timeout_s=1)
-    with TestClient(create_app(settings, FakeWorkflow())) as client:
+    with TestClient(create_app(settings, workflow=FakeWorkflow())) as client:
         with caplog.at_level(logging.ERROR, logger="clinic.errors"):
             response = client.request(method, path, json=body)
 
@@ -389,7 +388,7 @@ def test_missing_tables_are_json_503_database_unavailable_and_logged(
     monkeypatch.setattr(app_module, "prepare_database", lambda settings, clock: True)
     settings = make_settings(database_url=empty_database_url)
 
-    with TestClient(create_app(settings, FakeWorkflow())) as client:
+    with TestClient(create_app(settings, workflow=FakeWorkflow())) as client:
         with caplog.at_level(logging.ERROR, logger="clinic.errors"):
             response = client.request(method, path, json=body)
 
@@ -409,7 +408,7 @@ def test_the_same_endpoint_works_once_the_tables_exist(
     monkeypatch.setattr(app_module, "prepare_database", lambda settings, clock: True)
     settings = make_settings(database_url=empty_database_url)
 
-    with TestClient(create_app(settings, FakeWorkflow())) as client:
+    with TestClient(create_app(settings, workflow=FakeWorkflow())) as client:
         before = client.post("/api/v1/conversations", json={"patient_ref": "demo-patient-1"})
         with psycopg.connect(empty_database_url, autocommit=True, connect_timeout=5) as conn:
             apply_schema(conn)  # what the background retry does once the database is reachable
@@ -432,7 +431,9 @@ def test_any_other_sql_error_is_still_a_500(
     monkeypatch.setattr(conversations_repository, "create", broken_create)
     settings = make_settings(database_url=database_url)
 
-    with TestClient(create_app(settings, FakeWorkflow()), raise_server_exceptions=False) as client:
+    with TestClient(
+        create_app(settings, workflow=FakeWorkflow()), raise_server_exceptions=False
+    ) as client:
         response = client.post("/api/v1/conversations", json={"patient_ref": "demo-patient-1"})
 
     assert response.status_code == 500
@@ -473,17 +474,15 @@ def test_default_workflow_runs_the_checkpointed_graph(settings: Settings) -> Non
         stored = client.get(f"/api/v1/conversations/{conversation_id}").json()["messages"]
         checkpointed = _checkpointed(client, conversation_id)
 
-    # Until CFD-07 and the others land, every node is a stub with an honest fallback reply.
+    # What the graph answers depends on the nodes that have landed (stubs, then CFD-07's classify),
+    # so check the contract: a full answer, the same reply stored, and one checkpointed turn.
     assert response.status_code == 200
-    assert response.json() == {
-        "reply": NOT_IMPLEMENTED_REPLY,
-        "intent": "unclear",
-        "outcome": "not_implemented",
-        "status": "active",
-    }
+    body = response.json()
+    assert set(body) == {"reply", "intent", "outcome", "status"}
+    assert all(isinstance(body[key], str) and body[key] for key in body)
     assert [(m["role"], m["text"]) for m in stored] == [
         ("patient", "hello"),
-        ("assistant", NOT_IMPLEMENTED_REPLY),
+        ("assistant", body["reply"]),
     ]
     assert checkpointed == _turn_ids(conversation_id, 1)
 
@@ -527,7 +526,7 @@ def test_replayed_turn_replaces_itself_in_the_checkpoint(
     assert failed.status_code == 503
     assert retried.status_code == 200
     assert checkpointed == _turn_ids(conversation_id, 1)  # replaced, not appended
-    assert [m["text"] for m in stored] == ["hello", NOT_IMPLEMENTED_REPLY]
+    assert [m["text"] for m in stored] == ["hello", retried.json()["reply"]]
 
 
 def test_replay_after_an_interleaved_emergency_still_replaces(
