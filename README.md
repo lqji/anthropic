@@ -67,7 +67,7 @@ All settings are environment variables; the service refuses to start and names e
 | `RAG_MIN_SCORE`, `RAG_TOP_K` | `0.30`, `3` | Minimum score and number of document sections used to answer. |
 | `CLINIC_DOCS_DIR` | `seed/clinic_docs` | Markdown documents loaded at startup. |
 | `LANGGRAPH_STRICT_MSGPACK` | `true` | Keep `true`: checkpoints may only hold plain data. |
-| `APP_VERSION` | `dev` | Tags the image (`clinic-api:<version>`) and is shown by `/health`. |
+| `APP_VERSION` | the current release (`0.1.0`) | Tags the image (`clinic-api:<version>`) and is shown by `/health`. |
 
 ## Deploy and roll back
 
@@ -187,7 +187,8 @@ After a rollback the checkout is on the old tag (detached HEAD). To go forward a
    on the VM as above. A teammate who did not write the compose file clones the tag, runs
    `cp .env.example .env`, adds only the OpenAI key, `docker compose up --build -d --wait`, and runs
    `scripts/smoke_test.sh`.
-3. The release PR bumps the version in `pyproject.toml` and `src/clinic/__init__.py`, runs `uv lock`
+3. The release PR bumps the version in `pyproject.toml`, `src/clinic/__init__.py`, `compose.yaml` and
+   `.env.example` (the `APP_VERSION` default), runs `uv lock`
    and adds the section to `CHANGELOG.md`. After it merges, tag `main` (`git tag v0.1.0`), push the tag
    and create the GitHub release with the changelog section as its notes.
 4. Deploy `0.1.0` on the VM, check that `/health` reports `0.1.0` and run the smoke test. Practise the
