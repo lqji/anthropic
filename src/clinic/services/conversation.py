@@ -1,7 +1,6 @@
 """Start conversations, handle patient messages, and read a conversation back."""
 
 import logging
-from dataclasses import dataclass
 from typing import Protocol
 from uuid import UUID, uuid4
 
@@ -13,19 +12,18 @@ from clinic.locks import ConversationLocks
 from clinic.repositories import conversations, messages
 from clinic.repositories.conversations import ConversationRow
 from clinic.repositories.messages import MessageRow
+from clinic.services.emergency import EmergencyService
+from clinic.services.turn import TurnResult
 
 logger = logging.getLogger("clinic.conversation")
 
 # Must match the CHECK constraint on conversations.status (sql/01_conversations.sql).
 CONVERSATION_STATUSES = frozenset({"active", "awaiting_approval", "closed"})
 
-
-@dataclass(frozen=True)
-class TurnResult:
-    reply: str
-    intent: str
-    outcome: str
-    status: str
+STILL_WAITING = (
+    "We're still waiting for our front-desk staff to decide on your request. "
+    "I'll message you here as soon as they do."
+)
 
 
 class ConversationWorkflow(Protocol):
@@ -41,11 +39,13 @@ class ConversationService:
         clock: Clock,
         locks: ConversationLocks,
         workflow: ConversationWorkflow,
+        emergency: EmergencyService,
     ) -> None:
         self._pool = pool
         self._clock = clock
         self._locks = locks
         self._workflow = workflow
+        self._emergency = emergency
 
     def start(self, patient_ref: str) -> ConversationRow:
         with self._pool.connection() as conn:
@@ -60,7 +60,13 @@ class ConversationService:
             return conversation, messages.list_for(conn, cid)
 
     def handle_message(self, conversation_id: str, text: str) -> TurnResult:
-        """404 if unknown, 409 if another message is in progress, else run the turn and store it.
+        """An emergency is answered at once; else 404 if unknown, 409 if another message is in
+        progress, else run the turn and store it.
+
+        The emergency check comes first of all, before the conversation lookup, the lock and the
+        workflow, so an emergency is answered even while another turn holds the lock, the LLM is
+        down or the database is unreachable (it still gives 404 for a conversation that does
+        not exist).
 
         No database connection is held while the workflow runs (it may call the LLM), so slow
         turns cannot exhaust the pool. The patient message and the reply are stored together,
@@ -72,6 +78,10 @@ class ConversationService:
         replaces the turn in the checkpoint instead of duplicating it.
         """
         cid = _parse_id(conversation_id)
+        emergency = self._emergency.check(cid, text)
+        if emergency is not None:
+            return emergency
+
         with self._pool.connection() as conn:
             if conversations.get(conn, cid) is None:
                 raise NotFound("conversation not found")
@@ -86,7 +96,12 @@ class ConversationService:
                 raise WorkflowUnavailable("the workflow returned an invalid status")
 
             # One connection block is one transaction: both messages and the status, or nothing.
+            # The row lock keeps an emergency (which locks the same row) from storing its
+            # messages between the patient message and the reply of this turn.
             with self._pool.connection() as conn:
+                if conversations.get(conn, cid, for_update=True) is None:
+                    raise NotFound("conversation not found")
+                conversations.set_status(conn, cid, result.status)
                 messages.add(conn, cid, "patient", text, self._clock.now())
                 messages.add(
                     conn,
@@ -97,7 +112,6 @@ class ConversationService:
                     intent=result.intent,
                     outcome=result.outcome,
                 )
-                conversations.set_status(conn, cid, result.status)
 
         logger.info(
             "conversation.turn",
@@ -106,9 +120,22 @@ class ConversationService:
         return result
 
     def _paused_reply(self, conversation_id: UUID) -> TurnResult | None:
-        """Hook for CFD-14: a conversation waiting for staff approval answers "still waiting"
-        without invoking the workflow. Until then no conversation is ever paused."""
-        return None
+        """While a conversation waits for staff approval, answer "still waiting" without
+        invoking the workflow (its graph is paused at `await_approval`).
+
+        Called under the conversation lock, which a staff decision also takes, so the status
+        read here cannot be overtaken by a decision.
+        """
+        with self._pool.connection() as conn:
+            conversation = conversations.get(conn, conversation_id)
+        if conversation is None or conversation.status != "awaiting_approval":
+            return None
+        return TurnResult(
+            reply=STILL_WAITING,
+            intent="still_waiting",
+            outcome="still_waiting",
+            status="awaiting_approval",
+        )
 
 
 def _parse_id(conversation_id: str) -> UUID:

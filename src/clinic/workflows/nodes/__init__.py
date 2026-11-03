@@ -18,7 +18,7 @@ from clinic.workflows.nodes.approvals import (
     request_approval,
 )
 from clinic.workflows.nodes.classify import classify, make_classify
-from clinic.workflows.nodes.knowledge import knowledge
+from clinic.workflows.nodes.knowledge import knowledge, make_knowledge
 from clinic.workflows.nodes.reply import clarify, other
 from clinic.workflows.nodes.safety import decline, finalize
 
@@ -43,6 +43,7 @@ def wired_nodes(deps: WorkflowDeps) -> dict[str, Node]:
     """Real nodes built with their dependencies; they replace the stubs of the same name."""
     return {
         "classify": make_classify(deps),
+        "knowledge": make_knowledge(deps),
         "find_slots": make_find_slots(deps),
         "book": make_book(deps),
     }

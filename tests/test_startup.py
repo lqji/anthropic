@@ -19,6 +19,7 @@ from clinic.clock import SystemClock
 from clinic.config import Settings
 from clinic.rag.loader import KnowledgeLoader, LoadReport
 from clinic.schema import apply_schema, schema_files
+from tests.conftest import temporary_database
 
 SEED_DIR = Path(__file__).resolve().parents[1] / "seed" / "clinic_docs"
 
@@ -255,3 +256,23 @@ def test_startup_failure_closes_both_pools_and_stops_the_retry_thread(
     assert len(pools) == 2  # the app pool and the checkpoint pool
     assert all(pool.closed for pool in pools)  # an error at startup must not leak their threads
     assert not [t for t in threading.enumerate() if t.name == "prepare-database"]
+
+
+def test_startup_continues_when_the_reconcile_cannot_read_the_approvals(
+    make_settings: Callable[..., Settings],
+    database_url: str,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    # "Prepared", but the database has no tables: the startup reconcile fails. It is logged and
+    # must not stop the api.
+    monkeypatch.setattr(app_module, "prepare_database", lambda settings, clock: True)
+
+    with temporary_database(database_url) as empty_url:
+        with caplog.at_level(logging.ERROR, logger="clinic.startup"):
+            with TestClient(create_app(make_settings(database_url=empty_url))) as client:
+                assert client.get("/health").status_code == 200
+
+    assert [r.getMessage() for r in caplog.records if r.name == "clinic.startup"] == [
+        "startup.reconcile_failed"
+    ]
