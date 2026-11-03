@@ -135,6 +135,29 @@ If that day has none, it says so and offers the next day that has free slots
 (`outcome: "no_slots"`). An unknown or missing doctor gets a question listing the doctors
 (`outcome: "clarify"`) and leaves earlier `offered_slots` untouched.
 
+## `knowledge` (CFD-11)
+
+Answers a clinic question only from the clinic's documents (CFD-10 chunks), naming the source.
+
+1. `rag.retriever.search` runs a PostgreSQL full-text search (no vector store). The question's
+   words, stemmed and without stop words, are combined with OR. A chunk's searchable words are its
+   heading, its text and its document's file name (`cancellation-policy.md` reads as
+   "cancellation policy"). Chunks are ranked by `ts_rank_cd` with normalization 32
+   (`rank / (rank + 1)`, so scores are in [0, 1)). At most `RAG_TOP_K` chunks are kept, best
+   first, each scoring at least `RAG_MIN_SCORE` **and** sharing at least 2 words with the
+   question: one shared word ("test" in "Can you test my eyes?") is not an answer. A question of
+   stop words only finds nothing.
+2. No chunk: the fixed "not covered, please call the front desk" reply
+   (`outcome: "not_in_documents"`, `sources: []`). **The model is not called.**
+3. Otherwise `LLMPort.answer` gets only those chunks (heading + text, document name as source).
+   Its answer is used only if it has text and cites one of the documents it was given; anything
+   else, including a cited document that was not retrieved, is `not_in_documents` (the latter is
+   logged as `knowledge.ungrounded_source`).
+4. Answered: the reply ends with `Source: <document>`, `outcome: "answered"`, and `sources` lists
+   `{"document", "heading"}` of the retrieved chunks of the cited document. The api returns them.
+
+The database connection is released before the model call.
+
 ## History window (`history.py`)
 
 The checkpoint keeps every message. Prompts get `history_window(messages, HISTORY_WINDOW)`: the

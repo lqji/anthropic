@@ -21,11 +21,20 @@ CONVERSATION_STATUSES = frozenset({"active", "awaiting_approval", "closed"})
 
 
 @dataclass(frozen=True)
+class Source:
+    """A clinic document section a reply was answered from (CFD-11)."""
+
+    document: str
+    heading: str
+
+
+@dataclass(frozen=True)
 class TurnResult:
     reply: str
     intent: str
     outcome: str
     status: str
+    sources: tuple[Source, ...] = ()  # empty unless the reply came from the clinic documents
 
 
 class ConversationWorkflow(Protocol):
