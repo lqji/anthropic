@@ -5,7 +5,7 @@ from typing import Literal, Protocol
 from pydantic import BaseModel, ConfigDict, Field
 
 # Emergencies are not an intent: `is_emergency()` is deterministic code and runs before the model.
-Intent = Literal["find_slots", "book", "cancel", "ask_clinic", "other", "unclear"]
+Intent = Literal["find_slots", "book", "cancel", "clinic_question", "other", "unclear"]
 
 
 class ClassifyResult(BaseModel):

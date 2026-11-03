@@ -55,7 +55,7 @@ def _intent(words: set[str], doctor: str | None, resolved: dt.date | None) -> In
     if words & _BOOK:
         return "book"
     if words & _ASK_CLINIC:
-        return "ask_clinic"
+        return "clinic_question"
     if words & _FIND_SLOTS or (doctor and resolved):
         return "find_slots"
     if words & _GREETING:
