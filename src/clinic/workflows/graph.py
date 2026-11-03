@@ -7,6 +7,7 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 
 from clinic.config import Settings
+from clinic.domain.guard import asks_for_medical_advice
 from clinic.workflows.deps import WorkflowDeps
 from clinic.workflows.nodes import NODES, wired_nodes
 from clinic.workflows.routing import INTENT_ROUTES, START_ROUTES, route_intent, route_start
@@ -48,7 +49,11 @@ def build_graph(
     builder = StateGraph(ConversationState)
     for name, node in nodes.items():
         builder.add_node(name, node)
-    builder.add_conditional_edges(START, route_start, list(START_ROUTES))
+    builder.add_conditional_edges(
+        START,
+        partial(route_start, asks_for_medical_advice=asks_for_medical_advice),
+        list(START_ROUTES),
+    )
     builder.add_conditional_edges(
         "classify",
         partial(route_intent, min_confidence=settings.intent_min_confidence),

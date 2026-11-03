@@ -44,11 +44,27 @@ is its stub (routing-only tests). Until its story lands, a node is a stub that r
 ## Routing (`routing.py`)
 
 - `route_start`: `decline` if the deterministic medical-advice check matches the latest patient
-  message, else `classify`. The check is passed in; until CFD-09 it never matches.
+  message, else `classify`. The check is `domain.guard.asks_for_medical_advice`.
 - `route_intent`: `clinic_question` → `knowledge`, `find_slots`, `book`, `cancel`, `other`.
   `unclear`, an unknown intent, or confidence below `INTENT_MIN_CONFIDENCE` → `clarify`.
   `find_slots` and `book` that name a doctor or specialty missing from the catalogue also →
   `clarify`.
+
+## Safety (`domain/guard.py`, `nodes/safety.py`)
+
+No diagnosis and no treatment advice, in three layers:
+
+1. **Prompt rule.** Every OpenAI system prompt tells the model not to diagnose or recommend treatment.
+2. **Input check.** `route_start` sends a request for a diagnosis, a medicine or a dosage to
+   `decline` before any LLM call. `decline` replies with fixed text and an offer to find an
+   appointment (`outcome: "declined_medical_advice"`). No classify, no clinic documents.
+3. **Output guard.** `finalize` checks every reply. A diagnosis, a treatment recommendation or a
+   dosage is replaced by the decline text, the outcome becomes `declined_medical_advice`, and
+   `safety.guard_triggered` is logged with the rule name only (never the reply or the patient's words).
+
+Both checks are plain regular expressions on lower-cased text, so they are deterministic. They are
+English only and a safety net next to the prompt, not a guarantee. They lean towards blocking:
+a false alarm costs one polite redirect. Emergencies are handled before the graph (CFD-08).
 
 ## State (`state.py`)
 
