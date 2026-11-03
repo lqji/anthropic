@@ -19,7 +19,6 @@ from clinic.repositories import approvals, conversations
 from clinic.schema import apply_schema
 from clinic.workflows.approval import ApprovalState
 from tests.approval_harness import FakeBookings, running_app
-from tests.test_conversation_api import SEED_DIR
 
 CANCEL = "Cancel my appointment tomorrow"
 LABEL = "on 2026-11-04 at 09:30 with Dr. Salma Nasser"
@@ -32,7 +31,7 @@ def settings(make_settings: Callable[..., Settings], database_url: str) -> Setti
         # No app has started yet on a fresh database (CI), so create the tables first.
         apply_schema(conn)
         conn.execute("TRUNCATE conversations CASCADE")  # cascades to messages and approvals
-    return make_settings(database_url=database_url, clinic_docs_dir=SEED_DIR)
+    return make_settings(database_url=database_url)
 
 
 @pytest.fixture

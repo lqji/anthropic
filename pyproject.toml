@@ -22,6 +22,7 @@ dev = [
     "httpx",
     "ruff",
     "mypy",
+    "httpx2>=2.16.0",
 ]
 
 [build-system]

@@ -1,10 +1,17 @@
 import os
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
+from datetime import UTC, datetime
 from typing import Any
+from uuid import uuid4
 
+import psycopg
 import pytest
+from psycopg.conninfo import make_conninfo
 
+from clinic.clock import FixedClock
 from clinic.config import Settings
+from clinic.llm import FakeLLM
 
 UNREACHABLE_DB_URL = "postgresql://nobody:nothing@127.0.0.1:1/none"
 
@@ -28,3 +35,30 @@ def make_settings() -> Callable[..., Settings]:
         return Settings(**values)
 
     return build
+
+
+@pytest.fixture
+def fixed_clock() -> FixedClock:
+    """Monday 2026-11-02, 12:00 at the clinic (Asia/Muscat, UTC+4)."""
+    return FixedClock(datetime(2026, 11, 2, 8, 0, tzinfo=UTC))
+
+
+@pytest.fixture
+def fake_llm() -> FakeLLM:
+    return FakeLLM()
+
+
+@contextmanager
+def temporary_database(database_url: str) -> Iterator[str]:
+    """A brand-new, empty database on the test server; yields its URL and drops it afterwards."""
+    name = f"test_{uuid4().hex}"
+    identifier = psycopg.sql.Identifier(name)
+    with psycopg.connect(database_url, autocommit=True, connect_timeout=5) as admin:
+        admin.execute(psycopg.sql.SQL("CREATE DATABASE {}").format(identifier))
+    try:
+        yield make_conninfo(database_url, dbname=name)
+    finally:
+        with psycopg.connect(database_url, autocommit=True, connect_timeout=5) as admin:
+            admin.execute(
+                psycopg.sql.SQL("DROP DATABASE IF EXISTS {} WITH (FORCE)").format(identifier)
+            )

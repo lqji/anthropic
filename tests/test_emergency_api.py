@@ -3,17 +3,21 @@ import threading
 import time
 from collections.abc import Callable, Iterator
 from concurrent.futures import ThreadPoolExecutor
+from typing import Any
 from uuid import uuid4
 
 import psycopg
 import pytest
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from clinic import app as app_module
 from clinic.app import create_app
 from clinic.config import Settings
 from clinic.errors import LLMUnavailable
+from clinic.llm import ClassifyResult, ScriptedFakeLLM
 from clinic.repositories import emergencies as emergencies_repository
-from tests.test_conversation_api import SEED_DIR, FakeWorkflow
+from tests.test_conversation_api import FakeWorkflow
 
 EMERGENCY_NUMBER = "1234"  # not the default, so the reply must come from settings
 CHEST_PAIN = "I have crushing chest pain"
@@ -28,10 +32,8 @@ def workflow() -> FakeWorkflow:
 def client(
     make_settings: Callable[..., Settings], database_url: str, workflow: FakeWorkflow
 ) -> Iterator[TestClient]:
-    settings = make_settings(
-        database_url=database_url, clinic_docs_dir=SEED_DIR, emergency_number=EMERGENCY_NUMBER
-    )
-    with TestClient(create_app(settings, workflow)) as test_client:
+    settings = make_settings(database_url=database_url, emergency_number=EMERGENCY_NUMBER)
+    with TestClient(create_app(settings, workflow=workflow)) as test_client:
         with psycopg.connect(database_url, autocommit=True, connect_timeout=5) as conn:
             conn.execute("TRUNCATE conversations CASCADE")  # cascades to messages, emergencies
         yield test_client
@@ -177,12 +179,10 @@ def test_emergency_still_answered_when_the_database_is_down(
 ) -> None:
     workflow = FakeWorkflow()
     # make_settings defaults to an unreachable database; a 1 s pool timeout keeps the test short.
-    settings = make_settings(
-        db_pool_timeout_s=1, clinic_docs_dir=SEED_DIR, emergency_number=EMERGENCY_NUMBER
-    )
+    settings = make_settings(db_pool_timeout_s=1, emergency_number=EMERGENCY_NUMBER)
     url = f"/api/v1/conversations/{uuid4()}/messages"
 
-    with TestClient(create_app(settings, workflow)) as client:
+    with TestClient(create_app(settings, workflow=workflow)) as client:
         with caplog.at_level(logging.WARNING):
             emergency = client.post(url, json={"text": CHEST_PAIN})
             routine = client.post(url, json={"text": "What are your opening hours?"})
@@ -221,3 +221,40 @@ def test_emergency_still_answered_when_saving_fails_and_nothing_is_half_saved(
     # One transaction: the patient message written before the failure was rolled back.
     assert client.get(f"/api/v1/conversations/{conversation_id}").json()["messages"] == []
     assert client.get("/api/v1/emergencies").json() == []
+
+
+def test_an_emergency_never_reaches_the_graph_or_the_llm(
+    make_settings: Callable[..., Settings],
+    database_url: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """On the real graph (the default workflow), with an LLM that records every call."""
+    llm = ScriptedFakeLLM(classify=[ClassifyResult(intent="other")])
+    monkeypatch.setattr(app_module, "make_llm", lambda settings: llm)
+    settings = make_settings(database_url=database_url, emergency_number=EMERGENCY_NUMBER)
+
+    with TestClient(create_app(settings)) as client:
+        app = client.app
+        assert isinstance(app, FastAPI)
+        graph: Any = app.state.deps.graph
+        conversation_id = _start(client)
+        thread = {"configurable": {"thread_id": conversation_id}}
+
+        emergency = client.post(_url(conversation_id), json={"text": CHEST_PAIN})
+
+        assert emergency.status_code == 200
+        assert emergency.json()["outcome"] == "emergency"
+        assert EMERGENCY_NUMBER in emergency.json()["reply"]
+        assert llm.classify_calls == [] and llm.answer_calls == []  # zero LLM calls
+        assert not graph.get_state(thread).values  # the graph never ran
+
+        routine = client.post(_url(conversation_id), json={"text": "hello"})
+
+        assert routine.status_code == 200
+        assert len(llm.classify_calls) == 1  # a routine message does reach the LLM
+        messages = graph.get_state(thread).values["messages"]
+        # The emergency did not take a turn number: the routine message is graph turn 1.
+        assert [m.id for m in messages] == [
+            f"{conversation_id}:1:patient",
+            f"{conversation_id}:1:reply",
+        ]

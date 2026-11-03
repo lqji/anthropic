@@ -32,13 +32,6 @@ class ConversationWorkflow(Protocol):
     def run_turn(self, conversation_id: str, text: str) -> TurnResult: ...
 
 
-class UnavailableWorkflow:
-    """Used until a real workflow is wired in: every turn is a clear 503, never a fake reply."""
-
-    def run_turn(self, conversation_id: str, text: str) -> TurnResult:
-        raise WorkflowUnavailable("the conversation workflow is not available yet")
-
-
 class ConversationService:
     def __init__(
         self,
@@ -78,6 +71,11 @@ class ConversationService:
         No database connection is held while the workflow runs (it may call the LLM), so slow
         turns cannot exhaust the pool. The patient message and the reply are stored together,
         only after the workflow succeeded: a failed turn stores nothing, so a retry is clean.
+
+        If storing the turn fails (database error), the client gets a 503 and nothing is stored,
+        but the workflow has already run and checkpointed. A retry is safe: `GraphWorkflow`
+        numbers each turn from the stored messages, so the retry gets the same turn id and
+        replaces the turn in the checkpoint instead of duplicating it.
         """
         cid = _parse_id(conversation_id)
         emergency = self._emergency.check(cid, text)
