@@ -8,8 +8,9 @@
 #
 # It uses its own patient_ref, so it never touches real patients. It books a slot on a later day
 # and cancels it again, so the slot is free afterwards. Its emergency check leaves a flag in the
-# staff list (text starting "SMOKE TEST"); set SKIP_EMERGENCY=1 to leave that check out. The booking steps need a free slot on one of the next 4 days: the demo slots
-# are seeded once for 5 days, so on an old database run `docker compose down -v` first.
+# staff list (text starting "SMOKE TEST"); set SKIP_EMERGENCY=1 to leave that check out.
+# The booking steps need a free slot on one of the next 4 days: the demo slots are seeded once for
+# 5 days, so on an old database run `docker compose down -v` first.
 set -u -o pipefail
 
 BASE_URL="${1:-${BASE_URL:-http://localhost:8000}}"

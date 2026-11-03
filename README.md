@@ -172,6 +172,9 @@ APP_VERSION=<previous-tag> docker compose up --build -d --wait
 If the restore fails, the script stops before the deploy and `backup-now.sql` is what you go back
 to. Delete both backup files when you no longer need them.
 
+After a rollback the checkout is on the old tag (detached HEAD). To go forward again, run
+`git checkout <tag>` for the release you want and deploy it as above.
+
 ### If something is wrong
 
 | Symptom | Look at |
