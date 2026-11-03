@@ -11,18 +11,16 @@ Please bring the following to every visit:
 
 ## Arrival time
 
-Please arrive 10 minutes before your appointment to check in at the front desk. On your first visit, arrive 15 minutes early so you have time to fill in the registration form.
+Please arrive a few minutes before your appointment to check in at the front desk. On your first visit, allow extra time to fill in the registration form.
 
-If you arrive more than 15 minutes late, we may need to move your appointment to the next free slot.
+If you are running late, call the front desk.
 
 ## Blood tests
 
-Some blood tests require fasting. If your doctor has asked for a fasting blood test, do not eat or drink anything except water for 8 to 12 hours before the test. You may drink plain water as usual.
+Some blood tests require fasting. Whether your test needs fasting, and for how long, is set by the doctor who requested it.
 
-If you are not sure whether your test requires fasting, call the front desk before your visit and we will check the request from your doctor.
-
-Fasting blood tests are taken in the morning session, between 09:00 and 11:00.
+If you are not sure whether you need to fast before your blood test, call the front desk before your visit and we will check the request from your doctor.
 
 ## Children and companions
 
-Children under 18 must be accompanied by a parent or legal guardian. One companion may join any patient in the consultation room.
+Children must be accompanied by a parent or legal guardian. You may bring a companion to your visit.

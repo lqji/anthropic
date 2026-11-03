@@ -6,7 +6,7 @@ The clinic works directly with most major health insurance companies in the coun
 
 To use your insurance, show your valid insurance card and your photo ID at the front desk when you check in. The front desk checks your cover before the consultation. If the check cannot be completed, for example because the insurer's system is unavailable, you may pay for the visit yourself and ask your insurer for a refund later.
 
-Insurance cover depends on your own policy. Some policies need prior approval from the insurer for certain tests or procedures. When prior approval is needed, the front desk sends the request to your insurer and tells you when the answer arrives. This usually takes one to two working days. The clinic cannot guarantee that your insurer will approve a request.
+Insurance cover depends on your own policy. Some policies need prior approval from the insurer for certain tests or procedures. When prior approval is needed, the front desk sends the request to your insurer and tells you when the answer arrives. The clinic cannot guarantee that your insurer will approve a request.
 
 If your insurer refuses a claim after your visit, you are responsible for paying the amount that the insurer did not cover. The front desk will give you a copy of the refusal so you can contact your insurer.
 

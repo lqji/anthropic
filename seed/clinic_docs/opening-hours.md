@@ -2,7 +2,7 @@
 
 ## Daily hours
 
-The clinic is open every day of the week, including public holidays.
+The clinic is open every day of the week.
 
 - Morning session: 09:00 to 13:00
 - Afternoon session: 14:00 to 19:00
@@ -17,6 +17,6 @@ Walk-in patients are seen only if a slot is free. We recommend booking an appoin
 
 ## Front desk and phone
 
-The front desk opens at 08:45 so patients can check in before the first appointment. You can call the front desk during opening hours to book, change or cancel an appointment.
+You can call the front desk during opening hours to book, change or cancel an appointment.
 
 Outside opening hours the clinic cannot take calls. In an emergency, call the emergency number immediately.

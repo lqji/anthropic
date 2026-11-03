@@ -4,15 +4,9 @@
 
 You can ask to cancel an appointment in the chat or by calling the front desk during opening hours. Every cancellation is reviewed by front-desk staff. Your appointment stays booked until staff approve the cancellation, and you will receive a message with the decision.
 
-## Notice period
+## Notice
 
-Please cancel at least 24 hours before your appointment so we can offer the slot to another patient.
-
-## Late cancellations and missed appointments
-
-A cancellation less than 24 hours before the appointment counts as a late cancellation. If you miss an appointment without cancelling, it counts as a missed appointment.
-
-After three late cancellations or missed appointments within six months, the clinic may ask you to confirm future appointments by phone the day before.
+Please cancel as early as possible so we can offer the slot to another patient.
 
 ## Same-day appointments
 
