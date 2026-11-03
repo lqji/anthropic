@@ -77,6 +77,7 @@ Primitives only (plus LangChain messages), so checkpoints load under
 | `intent`, `confidence`, `entities` | Set by `classify` for the current turn |
 | `reply`, `outcome`, `sources` | This turn's answer; `finalize` appends `reply` to `messages` |
 | `offered_slots` | Slots last shown; kept across turns for "book the first one" |
+| `booking` | Booking `book` made this turn, for `confirm_booking`; reset by `new_turn` |
 | `approval_id` | Pending staff approval |
 | `status` | `active`, `awaiting_approval` or `closed` |
 
@@ -133,7 +134,34 @@ date means today, from now on. It replies with up to 5 numbered free slots in cl
 `[{"slot_id", "doctor_id", "doctor", "starts_at"}]`, so "book the first one" (CFD-13) can use them.
 If that day has none, it says so and offers the next day that has free slots
 (`outcome: "no_slots"`). An unknown or missing doctor gets a question listing the doctors
-(`outcome: "clarify"`) and leaves earlier `offered_slots` untouched.
+(`outcome: "clarify"`) and leaves earlier `offered_slots` untouched. A list ends with
+`Reply "book number 1" (or another number) to book.`
+
+## `book`, `confirm_booking` (CFD-13)
+
+`book` reads which offered slot the patient picked from their message, in code
+(`domain/choice.py`: "the first one", "2nd", "number 3", "#4", "option 5", or just "2"). It never
+guesses:
+
+| Situation | Reply |
+|---|---|
+| A valid pick of a later-day slot | `bookings.book_slot`, then `confirm_booking`: "You're booked with Dr. X on Tuesday 3 November at 09:00." (`outcome: "booked"`) |
+| A valid pick of a same-day slot | Same-day bookings need front-desk approval; nothing is booked (`outcome: "same_day_needs_approval"`) until CFD-15 |
+| The slot was taken meanwhile | It says so and lists free slots of that doctor and day (`outcome: "slot_taken"`, new `offered_slots`) |
+| No valid pick, but a doctor or specialty named | The slots, as `find_slots` lists them |
+| No valid pick after an offer | "Which slot would you like?" (`outcome: "clarify"`); the offer stays |
+| Nothing offered and no doctor | The `find_slots` question listing the doctors |
+
+The booking is made for the graph's thread, which is the conversation id. `book_slot` books in
+one statement: a conditional `UPDATE` of a `free`, not yet started slot to `booked`, and the
+`INSERT` of a `confirmed` booking on the row it returned. Two requests racing for one slot cannot
+both win: PostgreSQL locks the row, and the second finds it no longer `free`. The partial unique
+index `bookings_one_active_per_slot` is a second guard; its violation is mapped to
+`SlotUnavailable` by name.
+
+**Replay safety.** `book` leaves `offered_slots` as they are after booking. A replayed turn picks
+the same slot, and `book_slot` returns the conversation's existing `confirmed` booking for it
+instead of refusing it, so the retry confirms rather than saying the slot was taken.
 
 ## History window (`history.py`)
 
