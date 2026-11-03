@@ -31,11 +31,14 @@ def create(
     return ConversationRow(*row)
 
 
-def get(conn: Connection[TupleRow], conversation_id: UUID) -> ConversationRow | None:
-    row = conn.execute(
-        "SELECT id, patient_ref, status, created_at FROM conversations WHERE id = %s",
-        (conversation_id,),
-    ).fetchone()
+def get(
+    conn: Connection[TupleRow], conversation_id: UUID, *, for_update: bool = False
+) -> ConversationRow | None:
+    """`for_update` locks the row until the transaction ends (a fixed suffix, never user input)."""
+    query = "SELECT id, patient_ref, status, created_at FROM conversations WHERE id = %s"
+    if for_update:
+        query += " FOR UPDATE"
+    row = conn.execute(query, (conversation_id,)).fetchone()
     return None if row is None else ConversationRow(*row)
 
 

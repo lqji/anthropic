@@ -6,7 +6,7 @@ from langchain_core.runnables import RunnableConfig
 from psycopg_pool import ConnectionPool
 
 from clinic.repositories import messages
-from clinic.services.conversation import Source, TurnResult
+from clinic.services.turn import Source, TurnResult
 from clinic.workflows.graph import ConversationGraph
 from clinic.workflows.state import UNCLEAR, new_turn, turn_id_for
 

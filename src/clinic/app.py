@@ -1,6 +1,6 @@
 import logging
 import threading
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 
 import psycopg
@@ -8,7 +8,7 @@ from fastapi import FastAPI
 from langgraph.checkpoint.postgres import PostgresSaver
 
 from clinic import __version__
-from clinic.api import appointments, conversations, health
+from clinic.api import appointments, approvals, conversations, emergencies, health
 from clinic.clock import Clock, SystemClock
 from clinic.config import Settings
 from clinic.db import (
@@ -25,6 +25,7 @@ from clinic.observability import configure_logging, install_request_logging
 from clinic.rag.loader import KnowledgeLoader
 from clinic.schema import apply_schema
 from clinic.seed import seed_appointments
+from clinic.services.approval import ApprovalResumer, ApprovalService, UnavailableResumer
 from clinic.services.conversation import ConversationWorkflow
 from clinic.services.graph_workflow import GraphWorkflow
 from clinic.workflows.checkpointer import setup_checkpointer
@@ -85,8 +86,13 @@ def prepare_database(settings: Settings, clock: Clock) -> bool:
     return True
 
 
-def keep_preparing(settings: Settings, clock: Clock, stop: threading.Event) -> None:
-    """Retry `prepare_database` until it succeeds or the app shuts down.
+def keep_preparing(
+    settings: Settings,
+    clock: Clock,
+    stop: threading.Event,
+    on_ready: Callable[[], None] | None = None,
+) -> None:
+    """Retry `prepare_database` until it succeeds or the app shuts down, then run `on_ready`.
 
     Only an unreachable database is retried (see `is_unreachable`). Any other error (SQL bug,
     timed-out migration) will not fix itself: it is logged with its traceback and retrying stops,
@@ -95,6 +101,8 @@ def keep_preparing(settings: Settings, clock: Clock, stop: threading.Event) -> N
     while not stop.wait(PREPARE_RETRY_S):
         try:
             prepared = prepare_database(settings, clock)
+            if prepared and on_ready is not None:
+                on_ready()
         except Exception:
             logger.exception("startup.database_prepare_failed")
             return
@@ -108,11 +116,13 @@ def create_app(
     *,
     clock: Clock | None = None,
     workflow: ConversationWorkflow | None = None,
+    approval_resumer: ApprovalResumer | None = None,
 ) -> FastAPI:
     """`clock` defaults to the system clock; tests pass a FixedClock.
 
     Each conversation turn runs through the checkpointed graph. `workflow` replaces it, in tests
-    that need a slow or failing turn.
+    that need a slow or failing turn. `approval_resumer` resumes a conversation paused for staff
+    approval; until CFD-14's nodes are wired into the graph it answers 503.
     """
     configure_logging()
     app_clock = clock or SystemClock()
@@ -127,15 +137,7 @@ def create_app(
         # graph that cannot be built, ...) still stops the retry thread and closes both pools
         # instead of leaking their worker threads.
         try:
-            if not prepare_database(settings, app_clock):
-                # The database may come up after the api: keep trying in the background.
-                retry = threading.Thread(
-                    target=keep_preparing,
-                    args=(settings, app_clock, stop_retry),
-                    name="prepare-database",
-                    daemon=True,
-                )
-                retry.start()
+            prepared = prepare_database(settings, app_clock)
             # Do not wait for the first connection: /health must be able to report a down database.
             pool.open(wait=False)
             checkpoint_pool.open(wait=False)
@@ -153,7 +155,35 @@ def create_app(
                 llm=llm,
                 graph=graph,
                 workflow=workflow or GraphWorkflow(graph, pool),
+                approval_resumer=approval_resumer or UnavailableResumer(),
             )
+            deps = app.state.deps
+
+            def on_ready() -> None:
+                # Decisions stored before a crash but never applied are resumed now. A database
+                # error here is logged, not fatal: like an unreachable database at start, it must
+                # not stop the api, and staff can finish a stuck decision by repeating it.
+                try:
+                    ApprovalService(
+                        deps.pool, deps.clock, deps.locks, deps.approval_resumer
+                    ).reconcile()
+                except psycopg.Error as exc:
+                    logger.error(
+                        "startup.reconcile_failed",
+                        extra={"fields": {"error": type(exc).__name__}},
+                    )
+
+            if prepared:
+                on_ready()
+            else:
+                # The database may come up after the api: keep trying in the background.
+                retry = threading.Thread(
+                    target=keep_preparing,
+                    args=(settings, app_clock, stop_retry, on_ready),
+                    name="prepare-database",
+                    daemon=True,
+                )
+                retry.start()
             yield
         finally:
             stop_retry.set()
@@ -168,4 +198,6 @@ def create_app(
     app.include_router(health.router)
     app.include_router(appointments.router)
     app.include_router(conversations.router)
+    app.include_router(emergencies.router)
+    app.include_router(approvals.router)
     return app

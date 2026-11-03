@@ -8,6 +8,7 @@ from pydantic import BaseModel, StringConstraints
 from clinic.api.deps import get_deps
 from clinic.deps import Deps
 from clinic.services.conversation import ConversationService
+from clinic.services.emergency import EmergencyService
 
 router = APIRouter(prefix="/api/v1/conversations", tags=["conversations"])
 
@@ -56,11 +57,13 @@ class TurnOut(BaseModel):
     intent: str
     outcome: str
     status: str
+    approval_id: str | None = None  # only present while waiting for staff approval
     sources: list[SourceOut]  # clinic document sections the reply came from; [] otherwise
 
 
 def get_service(deps: Annotated[Deps, Depends(get_deps)]) -> ConversationService:
-    return ConversationService(deps.pool, deps.clock, deps.locks, deps.workflow)
+    emergency = EmergencyService(deps.pool, deps.clock, deps.settings.emergency_number)
+    return ConversationService(deps.pool, deps.clock, deps.locks, deps.workflow, emergency)
 
 
 Service = Annotated[ConversationService, Depends(get_service)]
@@ -74,7 +77,7 @@ def start_conversation(body: StartConversation, service: Service) -> Conversatio
     )
 
 
-@router.post("/{conversation_id}/messages")
+@router.post("/{conversation_id}/messages", response_model_exclude_none=True)
 def send_message(conversation_id: str, body: SendMessage, service: Service) -> TurnOut:
     result = service.handle_message(conversation_id, body.text)
     return TurnOut(
@@ -82,6 +85,7 @@ def send_message(conversation_id: str, body: SendMessage, service: Service) -> T
         intent=result.intent,
         outcome=result.outcome,
         status=result.status,
+        approval_id=result.approval_id,
         sources=[SourceOut(document=s.document, heading=s.heading) for s in result.sources],
     )
 

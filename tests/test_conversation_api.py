@@ -20,7 +20,7 @@ from clinic.errors import LLMUnavailable
 from clinic.repositories import conversations as conversations_repository
 from clinic.repositories import messages as messages_repository
 from clinic.schema import apply_schema
-from clinic.services.conversation import TurnResult
+from clinic.services.turn import TurnResult
 
 
 class FakeWorkflow:
