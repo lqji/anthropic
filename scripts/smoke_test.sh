@@ -148,11 +148,14 @@ case "$(field '.reply')" in
 esac
 pass "clinic question: answered from $SOURCE_DOC"
 
-# 5. Something the documents do not cover is not answered.
+# 5. Something the documents do not cover is not answered from them. The fake model says
+# not_in_documents; a real model may also read it as a general message ("other") or ask what is
+# meant, so what must hold is that nothing is made up: no "answered" outcome and no source.
 say "Where can I park my car?"
 expect_status "not in documents" 200
-expect_field "not in documents" '.outcome' not_in_documents
-pass "not in documents: the front desk is suggested instead of a guess"
+[ "$(field '.outcome')" != answered ] || fail "not in documents" "the question was answered although the documents do not cover it"
+[ "$(field '.sources | length')" = 0 ] || fail "not in documents" "the reply names a source for a question the documents do not cover"
+pass "not in documents: nothing was made up (outcome: $(field '.outcome'))"
 
 # 6. A slot is offered and booked on a later day, without staff.
 # The demo database is shared, so someone else may take the offered slot between the listing and
