@@ -325,8 +325,8 @@ def test_database_failure_while_storing_the_turn_is_503_and_stores_nothing(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """Pins the known failure mode (see handle_message): the workflow has already run when the
-    write fails, so a stateful workflow must make a replayed turn safe (CFD-05/CFD-14)."""
+    """The workflow has already run when the write fails, yet the client gets a clean 503 and
+    nothing is stored. That the retry is then safe is pinned by the real-graph tests below."""
     conversation_id = _start(client)
 
     def broken_add(*args: object, **kwargs: object) -> None:
