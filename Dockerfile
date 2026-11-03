@@ -14,4 +14,4 @@ RUN uv sync --locked --no-dev
 
 ENV PATH="/app/.venv/bin:$PATH"
 EXPOSE 8000
-CMD ["uvicorn", "clinic.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]
+CMD ["uvicorn", "clinic.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1", "--no-access-log"]
