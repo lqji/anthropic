@@ -63,15 +63,15 @@ def make_deps(database_url: str) -> Iterator[MakeDeps]:
 
 def _run(deps: WorkflowDeps, text: str) -> tuple[dict[str, Any], list[str]]:
     """Run one turn through the real graph: the final state and the nodes that ran, in order."""
-    thread: RunnableConfig = {"configurable": {"thread_id": str(uuid4())}}
+    conversation_id = str(uuid4())
+    thread: RunnableConfig = {"configurable": {"thread_id": conversation_id}}
+    turn = new_turn(text, "t1", conversation_id=conversation_id, patient_ref="demo-patient-1")
     checkpoint_pool = make_checkpoint_pool(deps.settings)
     checkpoint_pool.open(wait=True, timeout=10)
     try:
         graph: ConversationGraph = build_graph(deps.settings, PostgresSaver(checkpoint_pool), deps)
         visited = [
-            node
-            for update in graph.stream(new_turn(text, "t1"), thread, stream_mode="updates")
-            for node in update
+            node for update in graph.stream(turn, thread, stream_mode="updates") for node in update
         ]
         return dict(graph.get_state(thread).values), visited
     finally:

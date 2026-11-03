@@ -15,6 +15,7 @@ from clinic.workflows.nodes.approvals import (
     apply_decision,
     await_approval,
     cancel,
+    make_approval_nodes,
     request_approval,
 )
 from clinic.workflows.nodes.classify import classify, make_classify
@@ -46,4 +47,5 @@ def wired_nodes(deps: WorkflowDeps) -> dict[str, Node]:
         "knowledge": make_knowledge(deps),
         "find_slots": make_find_slots(deps),
         "book": make_book(deps),
+        **make_approval_nodes(deps),
     }

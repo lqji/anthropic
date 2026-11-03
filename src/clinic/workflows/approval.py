@@ -107,7 +107,7 @@ class ApprovalNodes:
         except ValueError:
             # The date comes from the intent step (an LLM), so it is not trusted: ask the patient.
             return _answered(ASK_DATE, "cancel_needs_date")
-        on_day = f" on {target}" if target else ""
+        on_day = f" on {on_date:%a} {on_date.day} {on_date:%b}" if on_date else ""
         matches = self._bookings.find_confirmed(state["patient_ref"], on_date)
         if not matches:
             return _answered(CANCEL_NOT_FOUND.format(on_day=on_day), "cancel_not_found")

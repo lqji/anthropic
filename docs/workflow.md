@@ -19,7 +19,9 @@ flowchart LR
     classify --> other
     classify --> clarify
     book --> confirm_booking
-    cancel --> request_approval --> await_approval --> apply_decision
+    cancel -->|one booking| request_approval --> await_approval --> apply_decision
+    cancel -->|none, which one, already waiting| finalize
+    request_approval -->|lost a race| finalize
     knowledge & find_slots & confirm_booking & apply_decision & other & clarify & decline --> finalize
     finalize --> END((end))
 ```
@@ -78,14 +80,20 @@ Primitives only (plus LangChain messages), so checkpoints load under
 | `reply`, `outcome`, `sources` | This turn's answer; `finalize` appends `reply` to `messages` |
 | `offered_slots` | Slots last shown; kept across turns for "book the first one" |
 | `booking` | Booking `book` made this turn, for `confirm_booking`; reset by `new_turn` |
-| `approval_id` | Pending staff approval |
+| `conversation_id`, `patient_ref` | Set by `new_turn`: whose booking `cancel` looks for and which conversation to pause |
+| `approval_kind`, `booking_id`, `booking_label`, `target_date` | The approval being asked for (CFD-14); `target_date` comes from `entities["date"]` |
+| `approval_id` | Pending staff approval (a string, `None` when there is none) |
+| `decision`, `decision_reason`, `decided_approval_id` | The staff decision and the approval it belongs to |
 | `status` | `active`, `awaiting_approval` or `closed` |
 
 Start every turn with:
 
 ```python
 turn_id = turn_id_for(conversation_id, turn_number)  # turn_number = graph turns stored + 1
-graph.invoke(new_turn(text, turn_id), {"configurable": {"thread_id": conversation_id}})
+graph.invoke(
+    new_turn(text, turn_id, conversation_id=conversation_id, patient_ref=patient_ref),
+    {"configurable": {"thread_id": conversation_id}},
+)
 ```
 
 **Replay safety.** The patient message gets id `<turn_id>:patient` and the reply
