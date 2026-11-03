@@ -2,6 +2,8 @@ import logging
 
 import psycopg
 import psycopg_pool
+from psycopg import Connection
+from psycopg.rows import DictRow, dict_row
 from psycopg_pool import ConnectionPool
 
 from clinic.config import Settings
@@ -10,6 +12,9 @@ logger = logging.getLogger("clinic.db")
 
 CONNECT_TIMEOUT_S = 5
 STATEMENT_TIMEOUT_MS = 5000
+# One-off schema and checkpoint migrations at startup: CREATE INDEX on a large checkpoint table
+# can take far longer than a request, but must still not hang forever.
+SETUP_STATEMENT_TIMEOUT_MS = 300_000
 
 
 def make_pool(settings: Settings) -> ConnectionPool:
@@ -20,6 +25,28 @@ def make_pool(settings: Settings) -> ConnectionPool:
         max_size=settings.db_pool_max_size,
         timeout=settings.db_pool_timeout_s,
         kwargs={
+            "connect_timeout": CONNECT_TIMEOUT_S,
+            "options": f"-c statement_timeout={STATEMENT_TIMEOUT_MS}",
+        },
+        open=False,
+    )
+
+
+def make_checkpoint_pool(settings: Settings) -> ConnectionPool[Connection[DictRow]]:
+    """Pool for PostgresSaver, which needs autocommit, dict rows and no prepared statements.
+
+    Kept apart from the app pool so repositories keep their one-block-one-transaction semantics.
+    """
+    return ConnectionPool(
+        settings.database_url,
+        connection_class=Connection[DictRow],
+        min_size=1,
+        max_size=settings.db_pool_max_size,
+        timeout=settings.db_pool_timeout_s,
+        kwargs={
+            "autocommit": True,
+            "prepare_threshold": 0,
+            "row_factory": dict_row,
             "connect_timeout": CONNECT_TIMEOUT_S,
             "options": f"-c statement_timeout={STATEMENT_TIMEOUT_MS}",
         },

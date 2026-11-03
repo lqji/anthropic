@@ -1,0 +1,117 @@
+# Conversation workflow (CFD-05)
+
+One LangGraph graph runs every patient message. Its state is checkpointed in PostgreSQL by
+`PostgresSaver` under `thread_id = conversation id`, so a conversation continues with full context
+after a restart. Code: `src/clinic/workflows/`.
+
+Emergencies never reach the graph: `is_emergency()` runs first, in the service (CFD-08).
+
+## Graph
+
+```mermaid
+flowchart LR
+    START((start)) -->|route_start| classify
+    START -->|route_start| decline
+    classify -->|route_intent| knowledge
+    classify --> find_slots
+    classify --> book
+    classify --> cancel
+    classify --> other
+    classify --> clarify
+    book --> confirm_booking
+    cancel --> request_approval --> await_approval --> apply_decision
+    knowledge & find_slots & confirm_booking & apply_decision & other & clarify & decline --> finalize
+    finalize --> END((end))
+```
+
+| Node | File | Filled in by |
+|---|---|---|
+| `classify` | `nodes/classify.py` | CFD-07 |
+| `clarify`, `other` | `nodes/reply.py` | CFD-07 |
+| `knowledge` | `nodes/knowledge.py` | CFD-11 |
+| `find_slots` | `nodes/appointments.py` | CFD-12 |
+| `book`, `confirm_booking` | `nodes/appointments.py` | CFD-13 (same-day branch: CFD-15) |
+| `cancel`, `request_approval`, `await_approval`, `apply_decision` | `nodes/approvals.py` | CFD-14 |
+| `decline`, `finalize` | `nodes/safety.py` | CFD-09 |
+
+Every node is `def node(state: ConversationState) -> dict[str, object]` and returns only the
+fields it changes. A node that needs the database is built once by a factory
+(`make_find_slots(deps)`) with a `WorkflowDeps` (settings, pool, clock), so its signature stays the
+same. `build_graph(settings, checkpointer, deps)` uses those real nodes; without `deps` every node
+is its stub (routing-only tests). Until its story lands, a node is a stub that replies with an honest
+"can't help with that here yet, please call the front desk" (`outcome: "not_implemented"`).
+
+## Routing (`routing.py`)
+
+- `route_start`: `decline` if the deterministic medical-advice check matches the latest patient
+  message, else `classify`. The check is passed in; until CFD-09 it never matches.
+- `route_intent`: `clinic_question` → `knowledge`, `find_slots`, `book`, `cancel`, `other`.
+  `unclear`, an unknown intent, or confidence below `INTENT_MIN_CONFIDENCE` → `clarify`.
+
+## State (`state.py`)
+
+Primitives only (plus LangChain messages), so checkpoints load under
+`LANGGRAPH_STRICT_MSGPACK=true` and survive code changes.
+
+| Field | Meaning |
+|---|---|
+| `messages` | Full history; nodes append, never replace |
+| `intent`, `confidence`, `entities` | Set by `classify` for the current turn |
+| `reply`, `outcome`, `sources` | This turn's answer; `finalize` appends `reply` to `messages` |
+| `offered_slots` | Slots last shown; kept across turns for "book the first one" |
+| `approval_id` | Pending staff approval |
+| `status` | `active`, `awaiting_approval` or `closed` |
+
+Start every turn with:
+
+```python
+turn_id = turn_id_for(conversation_id, turn_number)  # turn_number = graph turns stored + 1
+graph.invoke(new_turn(text, turn_id), {"configurable": {"thread_id": conversation_id}})
+```
+
+**Replay safety.** The patient message gets id `<turn_id>:patient` and the reply
+`<turn_id>:reply`, and `add_messages` replaces a message with the same id. If the graph ran but
+storing the turn in `messages` failed, the retry gets the same turn number and id, so it replaces
+that turn in the checkpoint instead of duplicating it.
+
+**Who numbers the turns (CFD-06).** `GraphWorkflow` (`services/graph_workflow.py`) counts the
+patient messages stored in `messages` whose reply came from the graph
+(`messages.count_graph_turns`). Replies from outside the graph do not count: an emergency
+(CFD-08, `outcome: "emergency"`) and the "still waiting" answer to a paused conversation
+(CFD-14, `outcome: "still_waiting"`). Counting them would renumber a turn whose retry is
+pending, and the retry would no longer replace it.
+
+`new_turn` resets the per-turn fields so nothing leaks from the previous turn. It deliberately
+keeps `offered_slots` (for "book the first one"), `status` and `approval_id`. The approval flow
+(CFD-14) owns the last two and must set and clear them explicitly when a decision is applied.
+
+## `find_slots` (CFD-12)
+
+Reads `doctor` or `specialty` and `date` (`YYYY-MM-DD`) from `entities`. A missing, invalid or past
+date means today, from now on. It replies with up to 5 numbered free slots in clinic time
+(`outcome: "slots_listed"`) and stores them as `offered_slots`:
+`[{"slot_id", "doctor_id", "doctor", "starts_at"}]`, so "book the first one" (CFD-13) can use them.
+If that day has none, it says so and offers the next day that has free slots
+(`outcome: "no_slots"`). An unknown or missing doctor gets a question listing the doctors
+(`outcome: "clarify"`) and leaves earlier `offered_slots` untouched.
+
+## History window (`history.py`)
+
+The checkpoint keeps every message. Prompts get `history_window(messages, HISTORY_WINDOW)`: the
+last `HISTORY_WINDOW` messages at most, starting with a patient message.
+
+## Startup
+
+On every start the lifespan runs `sql/*.sql` and `PostgresSaver.setup()` (both idempotent; setup
+uses its own autocommit connection). The graph's saver uses a separate pool with autocommit and
+dict rows, so the app pool keeps one-block-one-transaction semantics. If the database is down at
+start, this is logged as `startup.database_unavailable`, `/health` reports 503, and a background
+thread retries every 5 s until it succeeds (`startup.database_prepared_after_retry`). Only
+"cannot reach the database" is retried (no SQLSTATE, class 08, or 57P01-57P03). Any other error,
+such as a timed-out migration, stops a first start or is logged as
+`startup.database_prepare_failed` and stops the retry. Setup connections use a 5-minute
+statement timeout (`SETUP_STATEMENT_TIMEOUT_MS`) instead of the 5 s request timeout, so a
+migration on a large checkpoint table is not cancelled.
+
+`finalize` raises `MissingReplyError` if a turn reaches it without a `reply`: a node that forgets
+to answer fails loudly instead of being hidden behind a generic message.

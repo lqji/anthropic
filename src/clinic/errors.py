@@ -28,6 +28,13 @@ class NotFound(AppError):
     code = "not_found"
 
 
+class InvalidRequest(AppError):
+    """A request that is well-formed but breaks a rule (e.g. a date in the past)."""
+
+    status_code = 422
+    code = "validation_error"
+
+
 class ConversationBusy(AppError):
     status_code = 409
     code = "conversation_busy"

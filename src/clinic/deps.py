@@ -4,8 +4,10 @@ from psycopg_pool import ConnectionPool
 
 from clinic.clock import Clock
 from clinic.config import Settings
+from clinic.llm import LLMPort
 from clinic.locks import ConversationLocks
 from clinic.services.conversation import ConversationWorkflow
+from clinic.workflows.graph import ConversationGraph
 
 
 @dataclass(frozen=True)
@@ -16,4 +18,6 @@ class Deps:
     pool: ConnectionPool
     clock: Clock
     locks: ConversationLocks
-    workflow: ConversationWorkflow
+    llm: LLMPort
+    graph: ConversationGraph
+    workflow: ConversationWorkflow  # runs a turn: the graph, or a fake in tests

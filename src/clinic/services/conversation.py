@@ -34,13 +34,6 @@ class ConversationWorkflow(Protocol):
     def run_turn(self, conversation_id: str, text: str) -> TurnResult: ...
 
 
-class UnavailableWorkflow:
-    """Used until a real workflow is wired in: every turn is a clear 503, never a fake reply."""
-
-    def run_turn(self, conversation_id: str, text: str) -> TurnResult:
-        raise WorkflowUnavailable("the conversation workflow is not available yet")
-
-
 class ConversationService:
     def __init__(
         self,

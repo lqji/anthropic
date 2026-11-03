@@ -2,11 +2,13 @@ import logging
 import threading
 from collections.abc import Callable, Iterator
 from concurrent.futures import ThreadPoolExecutor
-from pathlib import Path
+from datetime import UTC, datetime
+from typing import Any
 from uuid import UUID, uuid4
 
 import psycopg
 import pytest
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from psycopg import sql
 from psycopg.conninfo import make_conninfo
@@ -19,8 +21,7 @@ from clinic.repositories import conversations as conversations_repository
 from clinic.repositories import messages as messages_repository
 from clinic.schema import apply_schema
 from clinic.services.conversation import TurnResult
-
-SEED_DIR = Path(__file__).resolve().parents[1] / "seed" / "clinic_docs"
+from clinic.workflows.nodes._stub import NOT_IMPLEMENTED_REPLY
 
 
 class FakeWorkflow:
@@ -54,7 +55,7 @@ class FakeWorkflow:
 
 @pytest.fixture
 def settings(make_settings: Callable[..., Settings], database_url: str) -> Settings:
-    return make_settings(database_url=database_url, clinic_docs_dir=SEED_DIR)
+    return make_settings(database_url=database_url)
 
 
 @pytest.fixture
@@ -191,17 +192,6 @@ def test_invalid_workflow_status_is_503_and_stores_nothing(
     ]
 
 
-def test_without_a_workflow_a_message_is_503_not_a_fake_reply(settings: Settings) -> None:
-    with TestClient(create_app(settings)) as client:
-        conversation_id = _start(client)
-        response = client.post(
-            f"/api/v1/conversations/{conversation_id}/messages", json={"text": "hello"}
-        )
-
-    assert response.status_code == 503
-    assert response.json()["code"] == "workflow_unavailable"
-
-
 # --- Read a conversation back ---------------------------------------------------------------
 
 
@@ -280,9 +270,7 @@ def test_ten_conversations_messaged_at_once_all_200(
     # a pool of 2, holding a connection during the workflow would starve the other eight (503).
     workflow = FakeWorkflow()
     workflow.barrier = threading.Barrier(10)
-    settings = make_settings(
-        database_url=database_url, clinic_docs_dir=SEED_DIR, db_pool_max_size=2
-    )
+    settings = make_settings(database_url=database_url, db_pool_max_size=2)
 
     with TestClient(create_app(settings, workflow)) as client:
         conversation_ids = [_start(client, f"patient-{n}") for n in range(10)]
@@ -320,7 +308,7 @@ def test_database_down_is_json_503_database_unavailable_and_logged(
     body: dict[str, str] | None,
 ) -> None:
     # make_settings defaults to an unreachable database; a 1 s pool timeout keeps the test short.
-    settings = make_settings(db_pool_timeout_s=1, clinic_docs_dir=SEED_DIR)
+    settings = make_settings(db_pool_timeout_s=1)
     with TestClient(create_app(settings, FakeWorkflow())) as client:
         with caplog.at_level(logging.ERROR, logger="clinic.errors"):
             response = client.request(method, path, json=body)
@@ -398,8 +386,8 @@ def test_missing_tables_are_json_503_database_unavailable_and_logged(
 ) -> None:
     # The api started while the database was down, so the tables are still being created by the
     # background retry. Turn that retry off: the tables stay missing.
-    monkeypatch.setattr(app_module, "prepare_database", lambda pool, settings: True)
-    settings = make_settings(database_url=empty_database_url, clinic_docs_dir=SEED_DIR)
+    monkeypatch.setattr(app_module, "prepare_database", lambda settings, clock: True)
+    settings = make_settings(database_url=empty_database_url)
 
     with TestClient(create_app(settings, FakeWorkflow())) as client:
         with caplog.at_level(logging.ERROR, logger="clinic.errors"):
@@ -418,8 +406,8 @@ def test_the_same_endpoint_works_once_the_tables_exist(
     empty_database_url: str,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(app_module, "prepare_database", lambda pool, settings: True)
-    settings = make_settings(database_url=empty_database_url, clinic_docs_dir=SEED_DIR)
+    monkeypatch.setattr(app_module, "prepare_database", lambda settings, clock: True)
+    settings = make_settings(database_url=empty_database_url)
 
     with TestClient(create_app(settings, FakeWorkflow())) as client:
         before = client.post("/api/v1/conversations", json={"patient_ref": "demo-patient-1"})
@@ -442,10 +430,178 @@ def test_any_other_sql_error_is_still_a_500(
         raise psycopg.errors.UndefinedColumn("column does not exist")
 
     monkeypatch.setattr(conversations_repository, "create", broken_create)
-    settings = make_settings(database_url=database_url, clinic_docs_dir=SEED_DIR)
+    settings = make_settings(database_url=database_url)
 
     with TestClient(create_app(settings, FakeWorkflow()), raise_server_exceptions=False) as client:
         response = client.post("/api/v1/conversations", json={"patient_ref": "demo-patient-1"})
 
     assert response.status_code == 500
     assert response.json()["code"] == "internal_error"
+
+
+# --- The real CFD-05 graph (the default workflow) -------------------------------------------
+
+
+def _deps(client: TestClient) -> Any:
+    app = client.app
+    assert isinstance(app, FastAPI)
+    return app.state.deps
+
+
+def _checkpointed(client: TestClient, conversation_id: str) -> list[tuple[str | None, str]]:
+    """(message id, type) of the messages the graph has checkpointed for a conversation."""
+    state = _deps(client).graph.get_state({"configurable": {"thread_id": conversation_id}})
+    return [(m.id, m.type) for m in state.values.get("messages", [])]
+
+
+def _turn_ids(conversation_id: str, *numbers: int) -> list[tuple[str, str]]:
+    """What the checkpoint holds after turns `numbers`: a patient and a reply message each."""
+    return [
+        (f"{conversation_id}:{n}:{kind}", kind_type)
+        for n in numbers
+        for kind, kind_type in (("patient", "human"), ("reply", "ai"))
+    ]
+
+
+def test_default_workflow_runs_the_checkpointed_graph(settings: Settings) -> None:
+    with TestClient(create_app(settings)) as client:
+        conversation_id = _start(client)
+
+        response = client.post(
+            f"/api/v1/conversations/{conversation_id}/messages", json={"text": "hello"}
+        )
+        stored = client.get(f"/api/v1/conversations/{conversation_id}").json()["messages"]
+        checkpointed = _checkpointed(client, conversation_id)
+
+    # Until CFD-07 and the others land, every node is a stub with an honest fallback reply.
+    assert response.status_code == 200
+    assert response.json() == {
+        "reply": NOT_IMPLEMENTED_REPLY,
+        "intent": "unclear",
+        "outcome": "not_implemented",
+        "status": "active",
+    }
+    assert [(m["role"], m["text"]) for m in stored] == [
+        ("patient", "hello"),
+        ("assistant", NOT_IMPLEMENTED_REPLY),
+    ]
+    assert checkpointed == _turn_ids(conversation_id, 1)
+
+
+def test_second_app_instance_continues_the_checkpointed_conversation(settings: Settings) -> None:
+    with TestClient(create_app(settings)) as first_app:
+        conversation_id = _start(first_app)
+        first_app.post(f"/api/v1/conversations/{conversation_id}/messages", json={"text": "one"})
+
+    with TestClient(create_app(settings)) as second_app:  # a restart: new pools, new graph
+        response = second_app.post(
+            f"/api/v1/conversations/{conversation_id}/messages", json={"text": "two"}
+        )
+        checkpointed = _checkpointed(second_app, conversation_id)
+
+    assert response.status_code == 200
+    assert checkpointed == _turn_ids(conversation_id, 1, 2)  # turn 2 continued after turn 1
+
+
+def test_replayed_turn_replaces_itself_in_the_checkpoint(
+    settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The graph ran, but storing the turn failed. The retry must not duplicate the turn."""
+
+    def broken_add(*args: object, **kwargs: object) -> None:
+        raise psycopg.OperationalError("server closed the connection unexpectedly")
+
+    with TestClient(create_app(settings)) as client:
+        conversation_id = _start(client)
+        url = f"/api/v1/conversations/{conversation_id}/messages"
+
+        monkeypatch.setattr(messages_repository, "add", broken_add)
+        failed = client.post(url, json={"text": "hello"})
+        monkeypatch.undo()
+        assert _checkpointed(client, conversation_id) == _turn_ids(conversation_id, 1)  # it ran
+
+        retried = client.post(url, json={"text": "hello"})
+        checkpointed = _checkpointed(client, conversation_id)
+        stored = client.get(f"/api/v1/conversations/{conversation_id}").json()["messages"]
+
+    assert failed.status_code == 503
+    assert retried.status_code == 200
+    assert checkpointed == _turn_ids(conversation_id, 1)  # replaced, not appended
+    assert [m["text"] for m in stored] == ["hello", NOT_IMPLEMENTED_REPLY]
+
+
+def test_replay_after_an_interleaved_emergency_still_replaces(
+    settings: Settings, database_url: str
+) -> None:
+    """An emergency is stored but never reaches the graph, so it must not renumber the turns."""
+    with TestClient(create_app(settings)) as client:
+        conversation_id = _start(client)
+        workflow = _deps(client).workflow
+        workflow.run_turn(conversation_id, "hello")  # the graph ran; storing the turn failed
+
+        with psycopg.connect(database_url, autocommit=True, connect_timeout=5) as conn:
+            now = datetime.now(UTC)
+            cid = UUID(conversation_id)
+            messages_repository.add(conn, cid, "patient", "I have chest pain", now)
+            messages_repository.add(
+                conn, cid, "assistant", "Call 9999", now, intent="emergency", outcome="emergency"
+            )
+        workflow.run_turn(conversation_id, "hello")  # the retry
+        checkpointed = _checkpointed(client, conversation_id)
+
+    assert checkpointed == _turn_ids(conversation_id, 1)  # still turn 1, so it replaced itself
+
+
+def test_count_graph_turns_skips_replies_that_did_not_come_from_the_graph(
+    client: TestClient, database_url: str
+) -> None:
+    conversation_id = UUID(_start(client))
+    now = datetime.now(UTC)
+    with psycopg.connect(database_url, autocommit=True, connect_timeout=5) as conn:
+        add = messages_repository.add
+        assert messages_repository.count_graph_turns(conn, conversation_id) == 0
+        add(conn, conversation_id, "patient", "hello", now)
+        add(conn, conversation_id, "assistant", "hi", now, intent="other", outcome="answered")
+        add(conn, conversation_id, "patient", "chest pain", now)
+        add(
+            conn, conversation_id, "assistant", "call", now, intent="emergency", outcome="emergency"
+        )
+        add(conn, conversation_id, "patient", "any news?", now)
+        add(conn, conversation_id, "assistant", "wait", now, intent="x", outcome="still_waiting")
+        add(conn, conversation_id, "assistant", "cancelled", now, intent="x", outcome="cancelled")
+        add(conn, conversation_id, "patient", "thanks", now)
+        add(conn, conversation_id, "assistant", "bye", now, intent="other", outcome="answered")
+
+        # Two graph turns. The emergency, the "still waiting" answer and an assistant-only message
+        # (a resumed approval) are not graph turns, and another conversation is not counted.
+        assert messages_repository.count_graph_turns(conn, conversation_id) == 2
+        assert messages_repository.count_graph_turns(conn, uuid4()) == 0
+
+
+def test_missing_checkpoint_tables_are_a_json_503_and_store_nothing(
+    make_settings: Callable[..., Settings],
+    empty_database_url: str,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The api started while the database was down: the app tables exist, but the checkpoint
+    tables are still being created by the background retry."""
+    monkeypatch.setattr(app_module, "prepare_database", lambda settings, clock: True)
+    with psycopg.connect(empty_database_url, autocommit=True, connect_timeout=5) as conn:
+        apply_schema(conn)
+    settings = make_settings(database_url=empty_database_url)
+
+    with TestClient(create_app(settings)) as client:
+        conversation_id = _start(client)
+        with caplog.at_level(logging.ERROR, logger="clinic.errors"):
+            response = client.post(
+                f"/api/v1/conversations/{conversation_id}/messages", json={"text": "hello"}
+            )
+        stored = client.get(f"/api/v1/conversations/{conversation_id}").json()["messages"]
+
+    assert response.status_code == 503  # not a 500
+    assert response.json()["code"] == "database_unavailable"
+    assert [r.getMessage() for r in caplog.records if r.name == "clinic.errors"] == [
+        "database_not_ready"
+    ]
+    assert stored == []
