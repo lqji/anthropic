@@ -12,6 +12,7 @@ from fastapi.testclient import TestClient
 from clinic.app import create_app
 from clinic.config import Settings
 from clinic.errors import LLMUnavailable
+from clinic.repositories import messages as messages_repository
 from clinic.services.conversation import TurnResult
 
 SEED_DIR = Path(__file__).resolve().parents[1] / "seed" / "clinic_docs"
@@ -293,3 +294,63 @@ def test_ten_conversations_messaged_at_once_all_200(
     assert [r.status_code for r in responses] == [200] * 10
     assert sorted(cid for cid, _ in workflow.calls) == sorted(conversation_ids)
     assert not workflow.barrier.broken
+
+
+# --- Database failures ----------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("method", "path", "body"),
+    [
+        ("POST", "/api/v1/conversations", {"patient_ref": "demo-patient-1"}),
+        ("POST", f"/api/v1/conversations/{uuid4()}/messages", {"text": "hello"}),
+        ("GET", f"/api/v1/conversations/{uuid4()}", None),
+    ],
+)
+def test_database_down_is_json_503_database_unavailable_and_logged(
+    make_settings: Callable[..., Settings],
+    caplog: pytest.LogCaptureFixture,
+    method: str,
+    path: str,
+    body: dict[str, str] | None,
+) -> None:
+    # make_settings defaults to an unreachable database; a 1 s pool timeout keeps the test short.
+    settings = make_settings(db_pool_timeout_s=1, clinic_docs_dir=SEED_DIR)
+    with TestClient(create_app(settings, FakeWorkflow())) as client:
+        with caplog.at_level(logging.ERROR, logger="clinic.errors"):
+            response = client.request(method, path, json=body)
+
+    assert response.status_code == 503
+    assert response.headers["content-type"].startswith("application/json")
+    assert response.json()["code"] == "database_unavailable"
+    logged = [r for r in caplog.records if r.name == "clinic.errors"]
+    assert [r.getMessage() for r in logged] == ["database_unavailable"]
+
+
+def test_database_failure_while_storing_the_turn_is_503_and_stores_nothing(
+    client: TestClient,
+    workflow: FakeWorkflow,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Pins the known failure mode (see handle_message): the workflow has already run when the
+    write fails, so a stateful workflow must make a replayed turn safe (CFD-05/CFD-14)."""
+    conversation_id = _start(client)
+
+    def broken_add(*args: object, **kwargs: object) -> None:
+        raise psycopg.OperationalError("server closed the connection unexpectedly")
+
+    monkeypatch.setattr(messages_repository, "add", broken_add)
+    with caplog.at_level(logging.ERROR, logger="clinic.errors"):
+        response = client.post(
+            f"/api/v1/conversations/{conversation_id}/messages", json={"text": "hello"}
+        )
+    monkeypatch.undo()
+
+    assert response.status_code == 503
+    assert response.json()["code"] == "database_unavailable"
+    assert workflow.calls == [(conversation_id, "hello")]  # the workflow did run
+    assert client.get(f"/api/v1/conversations/{conversation_id}").json()["messages"] == []
+    assert [r.getMessage() for r in caplog.records if r.name == "clinic.errors"] == [
+        "database_unavailable"
+    ]

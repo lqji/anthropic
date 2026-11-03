@@ -72,6 +72,12 @@ class ConversationService:
         No database connection is held while the workflow runs (it may call the LLM), so slow
         turns cannot exhaust the pool. The patient message and the reply are stored together,
         only after the workflow succeeded: a failed turn stores nothing, so a retry is clean.
+
+        Known failure mode, for CFD-05 and CFD-14: if storing the turn fails (database error), the
+        client gets a 503 and nothing is stored, but the workflow has already run. A stateful
+        workflow (a PostgresSaver checkpoint, an interrupt() pause) has then advanced, and a
+        retry replays the turn against that state. CFD-05 must make a replayed turn safe, for
+        example by keying the checkpoint write to a turn id or by reconciling from `messages`.
         """
         cid = _parse_id(conversation_id)
         with self._pool.connection() as conn:
