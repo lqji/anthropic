@@ -19,6 +19,7 @@ from psycopg_pool import ConnectionPool
 
 from clinic.clock import Clock
 from clinic.repositories import approvals, conversations
+from clinic.repositories.bookings import SAME_DAY_BOOKING
 
 CANCELLATION = "cancellation"
 APPROVED = "approved"
@@ -39,7 +40,16 @@ REQUESTED = {
         "I've asked our front-desk staff to approve cancelling your appointment {label}. "
         "It stays booked until they decide, and I'll message you here."
     ),
+    SAME_DAY_BOOKING: (
+        "Same-day appointments need approval from our front desk. I'm holding your appointment "
+        "{label} for you and have asked them to approve it. I'll message you here."
+    ),
 }
+SAME_DAY_CONFIRMED = "Your appointment {label} is confirmed. See you then!"
+SAME_DAY_REJECTED = (
+    "Our front desk did not approve your appointment {label}: {reason}. "
+    "The slot is free again; tell me if you'd like to pick another one."
+)
 CANCELLED = "Your appointment {label} has been cancelled."
 CANCEL_REJECTED = (
     "Your request to cancel your appointment {label} was not approved: {reason}. "
@@ -84,6 +94,15 @@ class BookingPort(Protocol):
     def cancel(self, booking_id: int) -> None:
         """Booking `cancelled` and its slot `free`. Must be idempotent: after a crash, a resume
         can apply the same decision twice."""
+        ...
+
+    def confirm_held(self, booking_id: int) -> None:
+        """Staff approved a held same-day booking: `confirmed`, slot `booked`. Idempotent."""
+        ...
+
+    def reject_held(self, booking_id: int) -> None:
+        """Staff rejected a held same-day booking: `rejected`, slot `free`. Idempotent, and it
+        never frees a slot that someone else has booked since."""
         ...
 
 
@@ -184,6 +203,15 @@ class ApprovalNodes:
                 reason = state.get("decision_reason") or ""
                 reply = CANCEL_REJECTED.format(label=label, reason=reason)
                 outcome = "cancel_rejected"
+        elif kind == SAME_DAY_BOOKING and booking_id is not None:
+            if decision == APPROVED:
+                self._bookings.confirm_held(booking_id)
+                reply, outcome = SAME_DAY_CONFIRMED.format(label=label), "booked"
+            else:
+                self._bookings.reject_held(booking_id)
+                reason = state.get("decision_reason") or ""
+                reply = SAME_DAY_REJECTED.format(label=label, reason=reason)
+                outcome = "booking_rejected"
         else:
             raise ValueError(f"no decision handling for approval kind {kind!r}")
         return {

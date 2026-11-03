@@ -1,7 +1,7 @@
 """Booking through the api and the real checkpointed graph, on a freshly seeded PostgreSQL.
 
 FakeLLM classifies; the clock is fixed at Monday 2026-11-02, 12:00 at the clinic, so "tomorrow"
-is a later day and "today" is a same-day booking.
+is a later day and "today" is a same-day booking (held for staff approval, CFD-15).
 """
 
 from collections import Counter
@@ -108,17 +108,19 @@ def test_a_later_pick_books_that_slot(settings: Settings) -> None:
     assert _bookings(settings) == [(conversation_id, "confirmed", "booked", "2026-11-03 10:00")]
 
 
-def test_a_same_day_slot_is_never_confirmed(settings: Settings) -> None:
+def test_a_same_day_slot_is_held_for_staff_and_not_confirmed(settings: Settings) -> None:
     with _app(settings) as client:
         conversation_id = _start(client)
         listed = _say(client, conversation_id, "When is Dr. Salma free today?")
         answer = _say(client, conversation_id, BOOK_FIRST)
 
     assert "1. 12:30" in listed["reply"]
-    assert answer["outcome"] == "same_day_needs_approval"
-    assert "need approval from our front desk" in answer["reply"]
-    assert _bookings(settings) == []
-    assert _slot_status(settings, "2026-11-02 12:30") == "free"
+    assert answer["outcome"] == "awaiting_approval"  # CFD-15: staff decide, nothing is confirmed
+    assert answer["status"] == "awaiting_approval"
+    assert _bookings(settings) == [
+        (conversation_id, "pending_approval", "held", "2026-11-02 12:30")
+    ]
+    assert _slot_status(settings, "2026-11-02 12:30") == "held"
 
 
 def test_a_slot_taken_meanwhile_says_so_and_lists_other_free_slots(settings: Settings) -> None:

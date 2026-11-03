@@ -1,6 +1,6 @@
 from datetime import date, datetime
 from typing import Final
-from uuid import UUID
+from uuid import UUID, uuid4
 from zoneinfo import ZoneInfo
 
 from langgraph.config import get_config
@@ -9,10 +9,11 @@ from psycopg.rows import TupleRow
 
 from clinic.domain.choice import slot_choice
 from clinic.domain.dates import today_in
+from clinic.domain.policies import requires_approval
 from clinic.domain.schedule import day_bounds, local_date
 from clinic.repositories import appointments, bookings
 from clinic.repositories.appointments import SlotRow
-from clinic.repositories.bookings import SlotUnavailable
+from clinic.repositories.bookings import SAME_DAY_BOOKING, SlotUnavailable
 from clinic.workflows.deps import WorkflowDeps
 from clinic.workflows.nodes._stub import not_implemented
 from clinic.workflows.nodes._types import Node
@@ -25,7 +26,6 @@ NO_SLOTS: Final = "no_slots"
 CLARIFY: Final = "clarify"
 BOOKED: Final = "booked"
 SLOT_TAKEN: Final = "slot_taken"
-SAME_DAY_NEEDS_APPROVAL: Final = "same_day_needs_approval"
 BOOK_HINT: Final = '\nReply "book number 1" (or another number) to book.'
 
 # A target to list slots for: (doctor_id, specialty_id, label for the reply such as "with Dr. X").
@@ -180,8 +180,9 @@ def make_book(deps: WorkflowDeps) -> Node:
 
     "Book the first one" picks from `offered_slots`, which the checkpoint keeps across turns and
     restarts. A later-day slot is booked atomically (`bookings.book_slot`) and handed to
-    `confirm_booking`. A same-day slot is never confirmed here: it needs front-desk approval
-    (CFD-15). A slot taken meanwhile gets an apology and a fresh list. Without a valid pick, the
+    `confirm_booking`. A same-day slot is never confirmed here: it is held and waits for
+    front-desk approval (CFD-15, `request_approval`). A slot taken meanwhile gets an apology
+    and a fresh list. Without a valid pick, the
     patient is shown slots (or asked which one) instead of the node guessing.
     """
     timezone = deps.settings.clinic_timezone
@@ -202,23 +203,27 @@ def make_book(deps: WorkflowDeps) -> Node:
 
         slot = offered[choice - 1]
         starts_at = datetime.fromisoformat(str(slot["starts_at"]))
-        if local_date(starts_at, timezone) == today_in(deps.clock, timezone):
-            return {
-                "reply": f"Same-day appointments need approval from our front desk, so I have not "
-                f"booked {starts_at:%H:%M} today. Please call the front desk, or pick a slot "
-                "on another day.",
-                "outcome": SAME_DAY_NEEDS_APPROVAL,
-            }
-
         now = deps.clock.now()
+        same_day = requires_approval(starts_at, now, timezone)
         with deps.pool.connection() as conn:
             try:
-                booking = bookings.book_slot(
-                    conn,
-                    slot_id=int(slot["slot_id"]),
-                    conversation_id=_conversation_id(),
-                    now=now,
-                )
+                if same_day:
+                    # Hold the slot and create the approval in one statement; `request_approval`
+                    # reuses that approval and pauses the conversation.
+                    held = bookings.hold_same_day(
+                        conn,
+                        slot_id=int(slot["slot_id"]),
+                        conversation_id=_conversation_id(),
+                        approval_id=uuid4(),
+                        now=now,
+                    )
+                else:
+                    booking = bookings.book_slot(
+                        conn,
+                        slot_id=int(slot["slot_id"]),
+                        conversation_id=_conversation_id(),
+                        now=now,
+                    )
             except SlotUnavailable:
                 target = (int(slot["doctor_id"]), None, f"with {slot['doctor']}")
                 fresh = _list_free(conn, now, local_date(starts_at, timezone), timezone, target)
@@ -231,6 +236,12 @@ def make_book(deps: WorkflowDeps) -> Node:
         # `offered_slots` stays as it is: a replayed turn (its storing failed) must pick the same
         # slot again, and `book_slot` then returns this conversation's booking instead of
         # refusing it.
+        if same_day:
+            return {
+                "approval_kind": SAME_DAY_BOOKING,
+                "booking_id": held.booking_id,
+                "booking_label": f"today at {starts_at:%H:%M} with {slot['doctor']}",
+            }
         return {
             "booking": {
                 "booking_id": booking.id,
