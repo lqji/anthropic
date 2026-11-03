@@ -6,7 +6,7 @@ from langchain_core.runnables import RunnableConfig
 from psycopg_pool import ConnectionPool
 
 from clinic.repositories import messages
-from clinic.services.turn import TurnResult
+from clinic.services.turn import Source, TurnResult
 from clinic.workflows.graph import ConversationGraph
 from clinic.workflows.state import UNCLEAR, new_turn, turn_id_for
 
@@ -35,4 +35,8 @@ class GraphWorkflow:
             intent=str(values.get("intent", UNCLEAR)),
             outcome=str(values["outcome"]),
             status=str(values.get("status", "active")),  # nodes set it once CFD-14 lands
+            sources=tuple(
+                Source(document=source["document"], heading=source["heading"])
+                for source in values.get("sources", [])
+            ),
         )

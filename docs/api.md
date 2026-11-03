@@ -21,8 +21,9 @@ Start a conversation.
 Send a patient message and get the assistant's reply.
 
 - Body: `{"text": "hello"}`. `text` is 1 to 2000 characters after trimming.
-- `200`: `{"reply": "...", "intent": "...", "outcome": "...", "status": "active"}`
+- `200`: `{"reply": "...", "intent": "...", "outcome": "...", "status": "active", "sources": []}`
 - `404 not_found`: unknown id (including an id that is not a UUID).
+- `503 llm_unavailable`: the language model failed or timed out.
 - `409 conversation_busy`: another message to the same conversation is still being handled.
 - `422 validation_error`: `text` is empty, blank, or over 2000 characters.
 - `503 workflow_unavailable`: the workflow returned a status the conversation cannot have.
@@ -40,8 +41,14 @@ message is flagged for staff (see below).
 
 The instruction needs no database. If the database is down or saving fails, the patient still gets
 the instruction (status 200), nothing is stored (the save is one transaction) and the error is
-logged as `emergency.persist_failed` with the rule name only. A conversation id that does not
-exist is still `404 not_found`.
+logged as `emergency.persist_failed` with the rule name only. In that case the text says
+"Please also phone the clinic directly" instead of "Our front-desk staff have been alerted",
+because no staff flag was saved. A conversation id that does not exist is still `404 not_found`.
+
+`sources` (CFD-11) lists the clinic document sections a clinic question was answered from, as
+`[{"document": "visit-preparation.md", "heading": "Blood tests"}]`, and the reply ends with
+`Source: <document>`. It is `[]` for every other reply, including `outcome: "not_in_documents"`
+(the question is not covered by the clinic's documents).
 
 ### `GET /api/v1/conversations/{id}`
 Read a conversation back, with all its messages oldest first.

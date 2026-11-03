@@ -47,12 +47,18 @@ class ConversationDetail(ConversationOut):
     messages: list[MessageOut]
 
 
+class SourceOut(BaseModel):
+    document: str
+    heading: str
+
+
 class TurnOut(BaseModel):
     reply: str
     intent: str
     outcome: str
     status: str
     approval_id: str | None = None  # only present while waiting for staff approval
+    sources: list[SourceOut]  # clinic document sections the reply came from; [] otherwise
 
 
 def get_service(deps: Annotated[Deps, Depends(get_deps)]) -> ConversationService:
@@ -80,6 +86,7 @@ def send_message(conversation_id: str, body: SendMessage, service: Service) -> T
         outcome=result.outcome,
         status=result.status,
         approval_id=result.approval_id,
+        sources=[SourceOut(document=s.document, heading=s.heading) for s in result.sources],
     )
 
 

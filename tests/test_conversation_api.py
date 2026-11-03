@@ -115,6 +115,7 @@ def test_message_returns_reply_intent_outcome_status(
         "intent": "general_question",
         "outcome": "answered",
         "status": "active",
+        "sources": [],
     }
     assert workflow.calls == [(conversation_id, "hello")]
 
@@ -478,8 +479,9 @@ def test_default_workflow_runs_the_checkpointed_graph(settings: Settings) -> Non
     # so check the contract: a full answer, the same reply stored, and one checkpointed turn.
     assert response.status_code == 200
     body = response.json()
-    assert set(body) == {"reply", "intent", "outcome", "status"}
-    assert all(isinstance(body[key], str) and body[key] for key in body)
+    assert set(body) == {"reply", "intent", "outcome", "status", "sources"}
+    assert all(isinstance(body[key], str) and body[key] for key in body if key != "sources")
+    assert isinstance(body["sources"], list)
     assert [(m["role"], m["text"]) for m in stored] == [
         ("patient", "hello"),
         ("assistant", body["reply"]),
