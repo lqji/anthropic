@@ -60,7 +60,9 @@ Primitives only (plus LangChain messages), so checkpoints load under
 | `status` | `active`, `awaiting_approval` or `closed` |
 
 Start every turn with `graph.invoke(new_turn(text), {"configurable": {"thread_id": conversation_id}})`:
-`new_turn` resets the per-turn fields so nothing leaks from the previous turn.
+`new_turn` resets the per-turn fields so nothing leaks from the previous turn. It deliberately
+keeps `offered_slots` (for "book the first one"), `status` and `approval_id`. The approval flow
+(CFD-14) owns the last two and must set and clear them explicitly when a decision is applied.
 
 ## History window (`history.py`)
 
