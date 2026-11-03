@@ -67,7 +67,7 @@ All settings are environment variables; the service refuses to start and names e
 | `RAG_MIN_SCORE`, `RAG_TOP_K` | `0.30`, `3` | Minimum score and number of document sections used to answer. |
 | `CLINIC_DOCS_DIR` | `seed/clinic_docs` | Markdown documents loaded at startup. |
 | `LANGGRAPH_STRICT_MSGPACK` | `true` | Keep `true`: checkpoints may only hold plain data. |
-| `APP_VERSION` | the current release (`0.1.0`) | Tags the image (`clinic-api:<version>`) and is shown by `/health`. |
+| `APP_VERSION` | `dev` | Names the image (`clinic-api:<version>`); pass it on the command line, not in `.env`. `/health` reports the version of the code (`src/clinic/__init__.py`), so it cannot disagree with what is running. |
 
 ## Deploy and roll back
 
@@ -114,8 +114,9 @@ The emergency check is left out by default, because it leaves a flag in the staf
 endpoint can close. On a demo or staging system add it with `RUN_EMERGENCY=1 scripts/smoke_test.sh`
 (the flag text starts with "SMOKE TEST" so staff can tell it apart).
 
-`<version>` is the tag without the leading `v` (tag `v0.1.0` is version `0.1.0`). It names the image
-(`clinic-api:0.1.0`) and is what `/health` reports, so check it after a deploy.
+`<version>` is the tag without the leading `v` (tag `v0.1.0` is version `0.1.0`). It only names the
+image (`clinic-api:0.1.0`), so that two releases can sit side by side for a rollback. `/health`
+reports the version of the code you built, so check it after a deploy: it should match the tag.
 
 `--wait` returns only when both services are healthy. The smoke test then walks through every
 feature: health, a clinic question, a question the documents do not cover, a booking, a
@@ -187,8 +188,7 @@ After a rollback the checkout is on the old tag (detached HEAD). To go forward a
    on the VM as above. A teammate who did not write the compose file clones the tag, runs
    `cp .env.example .env`, adds only the OpenAI key, `docker compose up --build -d --wait`, and runs
    `scripts/smoke_test.sh`.
-3. The release PR bumps the version in `pyproject.toml`, `src/clinic/__init__.py`, `compose.yaml` and
-   `.env.example` (the `APP_VERSION` default), runs `uv lock`
+3. The release PR bumps the version in `pyproject.toml` and `src/clinic/__init__.py`, runs `uv lock`
    and adds the section to `CHANGELOG.md`. After it merges, tag `main` (`git tag v0.1.0`), push the tag
    and create the GitHub release with the changelog section as its notes.
 4. Deploy `0.1.0` on the VM, check that `/health` reports `0.1.0` and run the smoke test. Practise the
