@@ -31,7 +31,7 @@ flowchart LR
 | `knowledge` | `nodes/knowledge.py` | CFD-11 |
 | `find_slots` | `nodes/appointments.py` | CFD-12 |
 | `book`, `confirm_booking` | `nodes/appointments.py` | CFD-13 (same-day branch: CFD-15) |
-| `cancel`, `request_approval`, `await_approval`, `apply_decision` | `nodes/approvals.py` | CFD-14 |
+| `cancel`, `request_approval`, `await_approval`, `apply_decision` | `nodes/approvals.py` (logic in `workflows/approval.py`, bookings in `workflows/bookings.py`) | CFD-14 (done) |
 | `decline`, `finalize` | `nodes/safety.py` | CFD-09 |
 
 Every node is `def node(state: ConversationState) -> dict[str, object]` and returns only the
@@ -77,15 +77,19 @@ Primitives only (plus LangChain messages), so checkpoints load under
 | `intent`, `confidence`, `entities` | Set by `classify` for the current turn |
 | `reply`, `outcome`, `sources` | This turn's answer; `finalize` appends `reply` to `messages` |
 | `offered_slots` | Slots last shown; kept across turns for "book the first one" |
+| `conversation_id`, `patient_ref` | Who the turn is for; set by `new_turn`, read by the approval nodes |
+| `approval_id` (a UUID string), `approval_kind`, `booking_id`, `booking_label`, `decision`, `decision_reason`, `decided_approval_id` | The staff approval flow (CFD-14); see `ApprovalState` |
 | `booking` | Booking `book` made this turn, for `confirm_booking`; reset by `new_turn` |
-| `approval_id` | Pending staff approval |
 | `status` | `active`, `awaiting_approval` or `closed` |
 
 Start every turn with:
 
 ```python
 turn_id = turn_id_for(conversation_id, turn_number)  # turn_number = graph turns stored + 1
-graph.invoke(new_turn(text, turn_id), {"configurable": {"thread_id": conversation_id}})
+graph.invoke(
+    new_turn(text, turn_id, conversation_id=conversation_id, patient_ref=patient_ref),
+    {"configurable": {"thread_id": conversation_id}},
+)
 ```
 
 **Replay safety.** The patient message gets id `<turn_id>:patient` and the reply
@@ -100,9 +104,11 @@ patient messages stored in `messages` whose reply came from the graph
 (CFD-14, `outcome: "still_waiting"`). Counting them would renumber a turn whose retry is
 pending, and the retry would no longer replace it.
 
-`new_turn` resets the per-turn fields so nothing leaks from the previous turn. It deliberately
-keeps `offered_slots` (for "book the first one"), `status` and `approval_id`. The approval flow
-(CFD-14) owns the last two and must set and clear them explicitly when a decision is applied.
+`new_turn` resets the per-turn fields so nothing leaks from the previous turn, including the
+approval fields (`approval_id`, `booking_id`, ...). It deliberately keeps `offered_slots` (for
+"book the first one") and `status`. A paused conversation is never given a new turn (the service
+answers "still waiting" instead), so a reset cannot lose a pending approval; the approval flow
+sets `status` when it pauses and when a decision is applied.
 
 ## `classify`, `clarify`, `other` (CFD-07)
 

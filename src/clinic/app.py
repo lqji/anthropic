@@ -25,9 +25,10 @@ from clinic.observability import configure_logging, install_request_logging
 from clinic.rag.loader import KnowledgeLoader
 from clinic.schema import apply_schema
 from clinic.seed import seed_appointments
-from clinic.services.approval import ApprovalResumer, ApprovalService, UnavailableResumer
+from clinic.services.approval import ApprovalResumer, ApprovalService
 from clinic.services.conversation import ConversationWorkflow
 from clinic.services.graph_workflow import GraphWorkflow
+from clinic.workflows.approval import GraphApprovalResumer
 from clinic.workflows.checkpointer import setup_checkpointer
 from clinic.workflows.deps import WorkflowDeps
 from clinic.workflows.graph import build_graph
@@ -122,7 +123,7 @@ def create_app(
 
     Each conversation turn runs through the checkpointed graph. `workflow` replaces it, in tests
     that need a slow or failing turn. `approval_resumer` resumes a conversation paused for staff
-    approval; until CFD-14's nodes are wired into the graph it answers 503.
+    approval; it defaults to resuming the compiled graph.
     """
     configure_logging()
     app_clock = clock or SystemClock()
@@ -155,7 +156,7 @@ def create_app(
                 llm=llm,
                 graph=graph,
                 workflow=workflow or GraphWorkflow(graph, pool),
-                approval_resumer=approval_resumer or UnavailableResumer(),
+                approval_resumer=approval_resumer or GraphApprovalResumer(graph),
             )
             deps = app.state.deps
 

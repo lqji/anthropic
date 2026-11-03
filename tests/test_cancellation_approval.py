@@ -18,7 +18,7 @@ from clinic.errors import WorkflowUnavailable
 from clinic.repositories import approvals, conversations
 from clinic.schema import apply_schema
 from clinic.workflows.approval import ApprovalState
-from tests.approval_harness import FakeBookings, running_app
+from tests.approval_harness import FakeBookings, running_app, seed_bookings
 
 CANCEL = "Cancel my appointment tomorrow"
 LABEL = "on 2026-11-04 at 09:30 with Dr. Salma Nasser"
@@ -31,6 +31,7 @@ def settings(make_settings: Callable[..., Settings], database_url: str) -> Setti
         # No app has started yet on a fresh database (CI), so create the tables first.
         apply_schema(conn)
         conn.execute("TRUNCATE conversations CASCADE")  # cascades to messages and approvals
+        seed_bookings(conn, [7, 8, 100, 101, 102])  # approvals reference real bookings
     return make_settings(database_url=database_url)
 
 
@@ -693,6 +694,7 @@ def test_deleting_a_conversation_with_an_approval_is_refused(database_url: str) 
             apply_schema(conn)
             now = datetime.now(UTC)
             conversation_id = uuid4()
+            seed_bookings(conn, [7])
             conversations.create(conn, conversation_id, "demo-patient-1", now)
             approvals.create(conn, uuid4(), conversation_id, "cancellation", 7, now)
 

@@ -8,9 +8,11 @@ import threading
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-from datetime import date
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
+from uuid import uuid4
 
+import psycopg
 from fastapi.testclient import TestClient
 from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.postgres import PostgresSaver
@@ -32,6 +34,41 @@ from clinic.workflows.approval import (
 
 PATIENT = "demo-patient-1"
 TOMORROW = "2026-11-04"
+
+
+def seed_bookings(conn: psycopg.Connection[Any], booking_ids: list[int]) -> None:
+    """Real `confirmed` bookings with these ids. An approval references a real booking (foreign
+    key), while the bookings the nodes see in these tests come from `FakeBookings`."""
+    conn.execute("INSERT INTO specialties (id, name) VALUES (9001, 'Test') ON CONFLICT DO NOTHING")
+    conn.execute(
+        "INSERT INTO doctors (id, name, specialty_id) VALUES (9001, 'Dr. Test', 9001)"
+        " ON CONFLICT DO NOTHING"
+    )
+    first = datetime(2030, 1, 1, 9, 0, tzinfo=UTC)
+    for n, booking_id in enumerate(booking_ids):
+        starts = first + timedelta(minutes=30 * n)
+        slot = conn.execute(
+            """
+            INSERT INTO slots (doctor_id, starts_at, ends_at, status)
+            VALUES (9001, %(starts)s, %(ends)s, 'booked')
+            ON CONFLICT (doctor_id, starts_at) DO UPDATE SET status = 'booked'
+            RETURNING id
+            """,
+            {"starts": starts, "ends": starts + timedelta(minutes=30)},
+        ).fetchone()
+        assert slot is not None
+        conversation_id = uuid4()
+        conn.execute(
+            "INSERT INTO conversations (id, patient_ref, created_at) VALUES (%s, 'seed', %s)",
+            (conversation_id, first),
+        )
+        conn.execute(
+            """
+            INSERT INTO bookings (id, slot_id, conversation_id, status, created_at, updated_at)
+            OVERRIDING SYSTEM VALUE VALUES (%s, %s, %s, 'confirmed', %s, %s)
+            """,
+            (booking_id, slot[0], conversation_id, first, first),
+        )
 
 
 class HarnessState(ApprovalState, total=False):

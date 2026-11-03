@@ -5,7 +5,7 @@ CREATE TABLE IF NOT EXISTS approvals (
     -- RESTRICT, not CASCADE: the audit rows must outlive any clean-up of conversations.
     conversation_id  uuid NOT NULL REFERENCES conversations (id) ON DELETE RESTRICT,
     kind             text NOT NULL CHECK (kind IN ('cancellation', 'same_day_booking')),
-    booking_id       bigint NOT NULL,                     -- FK to bookings once CFD-12 adds it
+    booking_id       bigint NOT NULL REFERENCES bookings (id),
     status           text NOT NULL DEFAULT 'pending'
                      CHECK (status IN ('pending', 'approved', 'rejected')),
     decided_by       text,
@@ -26,3 +26,18 @@ CREATE UNIQUE INDEX IF NOT EXISTS approvals_one_pending_per_conversation
 -- Startup reconcile: decided but the workflow never resumed (crash in between).
 CREATE INDEX IF NOT EXISTS approvals_unresumed_idx
     ON approvals (decided_at) WHERE status <> 'pending' AND resumed_at IS NULL;
+
+-- A database created before the reference existed gets it now. NOT VALID checks new rows only, so
+-- an old row that points at no booking cannot stop the api from starting.
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conname = 'approvals_booking_id_fkey' AND conrelid = 'approvals'::regclass
+    ) THEN
+        ALTER TABLE approvals
+            ADD CONSTRAINT approvals_booking_id_fkey
+            FOREIGN KEY (booking_id) REFERENCES bookings (id) NOT VALID;
+    END IF;
+END
+$$;
