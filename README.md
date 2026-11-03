@@ -134,10 +134,24 @@ Both images stay on the VM (`docker image ls clinic-api`), so building the older
 and nothing comes from a registry. Startup only adds what is missing and drops nothing, but a
 newer release may add a column or constraint that the older code does not expect. Roll back like
 this only to a release with the same database schema, and read the release notes first. Before a
-release that changes the database, take a backup:
+release that changes the database, take a backup. The dump holds patient data: it is written
+readable by you only, `backup-*.sql` is ignored by Git, and you delete it when it is no longer
+needed.
 
 ```bash
-docker compose exec -T db sh -c 'pg_dump -U "$POSTGRES_USER" "$POSTGRES_DB"' > backup-$(date +%F).sql
+(umask 077; docker compose exec -T db sh -c 'pg_dump -U "$POSTGRES_USER" "$POSTGRES_DB"' > backup-$(date +%F).sql)
+```
+
+To go back to an older release whose code does not work with the newer schema, restore the backup
+taken before the upgrade (**this discards everything saved since**):
+
+```bash
+docker compose down -v                      # deletes the database volume
+docker compose up -d --wait db              # a new, empty database
+docker compose exec -T db sh -c 'psql -U "$POSTGRES_USER" "$POSTGRES_DB"' < backup-<date>.sql
+git checkout <previous-tag>
+APP_VERSION=<previous-tag> docker compose up --build -d --wait
+scripts/smoke_test.sh
 ```
 
 ### If something is wrong
