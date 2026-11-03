@@ -58,12 +58,22 @@ class KnowledgeLoader:
                 )
                 report.skipped.append(name)
                 continue
+            # Delete-then-insert of a document's chunks assumes one loader at a time, which the
+            # single-uvicorn-worker rule guarantees; two loaders could race on the ordinals.
             knowledge.replace_document(
                 conn, name, sha256, [(chunk.heading, chunk.content) for chunk in chunks]
             )
             report.loaded.append(name)
 
-        report.removed = knowledge.delete_documents_except(conn, report.loaded + report.unchanged)
+        kept = report.loaded + report.unchanged
+        if not kept:
+            # Usually a wrong CLINIC_DOCS_DIR or an empty volume: make it stand out in the logs.
+            logger.error(
+                "knowledge.no_documents: no loadable *.md file in %s",
+                self._docs_dir,
+                extra={"fields": {"docs_dir": str(self._docs_dir)}},
+            )
+        report.removed = knowledge.delete_documents_except(conn, kept)
         for name in report.removed:
             logger.warning("knowledge.document_removed: %s", name, extra={"fields": {"file": name}})
 

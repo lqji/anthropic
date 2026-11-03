@@ -204,6 +204,24 @@ def test_file_that_becomes_bad_loses_its_old_chunks(
     assert report.unchanged == [n for n in SEED_NAMES if n != "insurance.md"]
 
 
+def test_empty_docs_directory_logs_error_and_removes_everything(
+    conn: Connection[TupleRow],
+    docs_dir: Path,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    KnowledgeLoader(docs_dir).load(conn)
+    empty = tmp_path / "empty"
+    empty.mkdir()
+
+    with caplog.at_level(logging.ERROR, logger="clinic.rag"):
+        report = KnowledgeLoader(empty).load(conn)
+
+    assert report.removed == SEED_NAMES
+    errors = [r.getMessage() for r in caplog.records if r.levelno == logging.ERROR]
+    assert errors == [f"knowledge.no_documents: no loadable *.md file in {empty}"]
+
+
 def test_chunking_rule_change_rechunks_unchanged_files(
     conn: Connection[TupleRow], docs_dir: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
