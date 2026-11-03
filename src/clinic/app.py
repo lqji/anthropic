@@ -10,6 +10,7 @@ from clinic.config import Settings
 from clinic.db import make_pool
 from clinic.deps import Deps
 from clinic.errors import install_error_handlers
+from clinic.llm import make_llm
 from clinic.locks import ConversationLocks
 from clinic.observability import configure_logging, install_request_logging
 
@@ -23,7 +24,11 @@ def create_app(settings: Settings) -> FastAPI:
         # Do not wait for the first connection: /health must be able to report a down database.
         pool.open(wait=False)
         app.state.deps = Deps(
-            settings=settings, pool=pool, clock=SystemClock(), locks=ConversationLocks()
+            settings=settings,
+            pool=pool,
+            clock=SystemClock(),
+            locks=ConversationLocks(),
+            llm=make_llm(settings),
         )
         try:
             yield

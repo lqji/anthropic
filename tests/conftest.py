@@ -1,10 +1,13 @@
 import os
 from collections.abc import Callable
+from datetime import UTC, datetime
 from typing import Any
 
 import pytest
 
+from clinic.clock import FixedClock
 from clinic.config import Settings
+from clinic.llm import FakeLLM
 
 UNREACHABLE_DB_URL = "postgresql://nobody:nothing@127.0.0.1:1/none"
 
@@ -28,3 +31,14 @@ def make_settings() -> Callable[..., Settings]:
         return Settings(**values)
 
     return build
+
+
+@pytest.fixture
+def fixed_clock() -> FixedClock:
+    """Monday 2026-11-02, 12:00 at the clinic (Asia/Muscat, UTC+4)."""
+    return FixedClock(datetime(2026, 11, 2, 8, 0, tzinfo=UTC))
+
+
+@pytest.fixture
+def fake_llm() -> FakeLLM:
+    return FakeLLM()
