@@ -8,7 +8,7 @@ from fastapi import FastAPI
 from langgraph.checkpoint.postgres import PostgresSaver
 
 from clinic import __version__
-from clinic.api import appointments, health
+from clinic.api import appointments, conversations, health
 from clinic.clock import Clock, SystemClock
 from clinic.config import Settings
 from clinic.db import (
@@ -25,6 +25,8 @@ from clinic.observability import configure_logging, install_request_logging
 from clinic.rag.loader import KnowledgeLoader
 from clinic.schema import apply_schema
 from clinic.seed import seed_appointments
+from clinic.services.conversation import ConversationWorkflow
+from clinic.services.graph_workflow import GraphWorkflow
 from clinic.workflows.checkpointer import setup_checkpointer
 from clinic.workflows.deps import WorkflowDeps
 from clinic.workflows.graph import build_graph
@@ -101,8 +103,17 @@ def keep_preparing(settings: Settings, clock: Clock, stop: threading.Event) -> N
             return
 
 
-def create_app(settings: Settings, *, clock: Clock | None = None) -> FastAPI:
-    """`clock` defaults to the system clock; tests pass a FixedClock."""
+def create_app(
+    settings: Settings,
+    *,
+    clock: Clock | None = None,
+    workflow: ConversationWorkflow | None = None,
+) -> FastAPI:
+    """`clock` defaults to the system clock; tests pass a FixedClock.
+
+    Each conversation turn runs through the checkpointed graph. `workflow` replaces it, in tests
+    that need a slow or failing turn.
+    """
     configure_logging()
     app_clock = clock or SystemClock()
 
@@ -129,17 +140,19 @@ def create_app(settings: Settings, *, clock: Clock | None = None) -> FastAPI:
             pool.open(wait=False)
             checkpoint_pool.open(wait=False)
             llm = make_llm(settings)
+            graph = build_graph(
+                settings,
+                PostgresSaver(checkpoint_pool),
+                WorkflowDeps(settings=settings, pool=pool, clock=app_clock, llm=llm),
+            )
             app.state.deps = Deps(
                 settings=settings,
                 pool=pool,
                 clock=app_clock,
                 locks=ConversationLocks(),
                 llm=llm,
-                graph=build_graph(
-                    settings,
-                    PostgresSaver(checkpoint_pool),
-                    WorkflowDeps(settings=settings, pool=pool, clock=app_clock, llm=llm),
-                ),
+                graph=graph,
+                workflow=workflow or GraphWorkflow(graph, pool),
             )
             yield
         finally:
@@ -154,4 +167,5 @@ def create_app(settings: Settings, *, clock: Clock | None = None) -> FastAPI:
     install_error_handlers(app)
     app.include_router(health.router)
     app.include_router(appointments.router)
+    app.include_router(conversations.router)
     return app

@@ -67,7 +67,7 @@ Primitives only (plus LangChain messages), so checkpoints load under
 Start every turn with:
 
 ```python
-turn_id = turn_id_for(conversation_id, turn_number)  # turn_number = patient messages stored + 1
+turn_id = turn_id_for(conversation_id, turn_number)  # turn_number = graph turns stored + 1
 graph.invoke(new_turn(text, turn_id), {"configurable": {"thread_id": conversation_id}})
 ```
 
@@ -75,6 +75,13 @@ graph.invoke(new_turn(text, turn_id), {"configurable": {"thread_id": conversatio
 `<turn_id>:reply`, and `add_messages` replaces a message with the same id. If the graph ran but
 storing the turn in `messages` failed, the retry gets the same turn number and id, so it replaces
 that turn in the checkpoint instead of duplicating it.
+
+**Who numbers the turns (CFD-06).** `GraphWorkflow` (`services/graph_workflow.py`) counts the
+patient messages stored in `messages` whose reply came from the graph
+(`messages.count_graph_turns`). Replies from outside the graph do not count: an emergency
+(CFD-08, `outcome: "emergency"`) and the "still waiting" answer to a paused conversation
+(CFD-14, `outcome: "still_waiting"`). Counting them would renumber a turn whose retry is
+pending, and the retry would no longer replace it.
 
 `new_turn` resets the per-turn fields so nothing leaks from the previous turn. It deliberately
 keeps `offered_slots` (for "book the first one"), `status` and `approval_id`. The approval flow

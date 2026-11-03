@@ -6,6 +6,7 @@ from clinic.clock import Clock
 from clinic.config import Settings
 from clinic.llm import LLMPort
 from clinic.locks import ConversationLocks
+from clinic.services.conversation import ConversationWorkflow
 from clinic.workflows.graph import ConversationGraph
 
 
@@ -19,3 +20,4 @@ class Deps:
     locks: ConversationLocks
     llm: LLMPort
     graph: ConversationGraph
+    workflow: ConversationWorkflow  # runs a turn: the graph, or a fake in tests

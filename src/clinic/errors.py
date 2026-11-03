@@ -50,6 +50,11 @@ class LLMUnavailable(AppError):
     code = "llm_unavailable"
 
 
+class WorkflowUnavailable(AppError):
+    status_code = 503
+    code = "workflow_unavailable"
+
+
 _HTTP_CODES = {404: "not_found", 405: "method_not_allowed"}
 
 
@@ -86,3 +91,12 @@ def install_error_handlers(app: FastAPI) -> None:
     def handle_database_error(request: Request, exc: Exception) -> JSONResponse:
         logger.error("database_unavailable", extra={"fields": {"error": type(exc).__name__}})
         return error_response(request, 503, DatabaseUnavailable.code, "database unavailable")
+
+    @app.exception_handler(psycopg.errors.UndefinedTable)
+    def handle_missing_table(request: Request, exc: Exception) -> JSONResponse:
+        # The api starts even if the database is down at start, and creates the tables in the
+        # background once it is reachable. Until then a missing table means "not ready yet", so it
+        # is a logged 503 like an unreachable database, not a 500. Only this error is mapped:
+        # any other SQL error is still a bug and stays a 500.
+        logger.error("database_not_ready", extra={"fields": {"error": type(exc).__name__}})
+        return error_response(request, 503, DatabaseUnavailable.code, "database not ready yet")
