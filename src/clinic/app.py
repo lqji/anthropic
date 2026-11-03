@@ -46,9 +46,19 @@ def prepare_database(pool: ConnectionPool, settings: Settings) -> bool:
 
 
 def keep_preparing(pool: ConnectionPool, settings: Settings, stop: threading.Event) -> None:
-    """Retry `prepare_database` until it succeeds or the app shuts down."""
+    """Retry `prepare_database` until it succeeds or the app shuts down.
+
+    Only an unreachable database is retried. Any other error (missing docs directory, SQL bug)
+    will not fix itself: it is logged with its traceback as a structured line and retrying stops,
+    mirroring the first start, where the same errors stop startup.
+    """
     while not stop.wait(PREPARE_RETRY_S):
-        if prepare_database(pool, settings):
+        try:
+            prepared = prepare_database(pool, settings)
+        except Exception:
+            logger.exception("startup.database_prepare_failed")
+            return
+        if prepared:
             logger.info("startup.database_prepared_after_retry")
             return
 
