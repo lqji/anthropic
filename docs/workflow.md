@@ -159,6 +159,13 @@ both win: PostgreSQL locks the row, and the second finds it no longer `free`. Th
 index `bookings_one_active_per_slot` is a second guard; its violation is mapped to
 `SlotUnavailable` by name.
 
+`bookings.hold_same_day` is the same-day counterpart, for CFD-15 to call (`book` does not use it
+yet). In one statement it changes a `free`, not yet started slot to `held`, inserts a
+`pending_approval` booking on it and a `pending` `same_day_booking` approval for that booking:
+all three or nothing. Same guards and the same `SlotUnavailable`. A replayed turn gets the
+conversation's existing hold back. Any other unique violation, such as the conversation already
+waiting for another approval, is raised as it is.
+
 **Replay safety.** `book` leaves `offered_slots` as they are after booking. A replayed turn picks
 the same slot, and `book_slot` returns the conversation's existing `confirmed` booking for it
 instead of refusing it, so the retry confirms rather than saying the slot was taken.
