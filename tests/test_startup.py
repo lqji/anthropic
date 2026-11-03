@@ -1,11 +1,15 @@
 import logging
+import time
 from collections.abc import Callable
 from pathlib import Path
 
 import psycopg
 import pytest
 from fastapi.testclient import TestClient
+from psycopg import Connection
+from psycopg.rows import TupleRow
 
+from clinic import app as app_module
 from clinic.app import create_app
 from clinic.config import Settings
 from clinic.schema import apply_schema, schema_files
@@ -57,6 +61,43 @@ def test_startup_with_database_down_logs_and_still_serves_health(
     assert [r.getMessage() for r in caplog.records if r.name == "clinic.startup"] == [
         "startup.database_unavailable"
     ]
+
+
+def test_database_back_after_failed_start_is_prepared_by_retry(
+    make_settings: Callable[..., Settings],
+    database_url: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    with psycopg.connect(database_url, autocommit=True, connect_timeout=5) as conn:
+        conn.execute("DROP TABLE IF EXISTS doc_chunks, documents")
+    calls = 0
+
+    def down_once(conn: Connection[TupleRow]) -> None:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise psycopg.OperationalError("database is starting up")
+        apply_schema(conn)
+
+    monkeypatch.setattr(app_module, "apply_schema", down_once)
+    monkeypatch.setattr(app_module, "PREPARE_RETRY_S", 0.05)
+    settings = make_settings(database_url=database_url, clinic_docs_dir=SEED_DIR)
+
+    with TestClient(create_app(settings)):
+        deadline = time.monotonic() + 10
+        loaded: tuple[object, ...] | None = None
+        while time.monotonic() < deadline:
+            with psycopg.connect(database_url, connect_timeout=5) as conn:
+                try:
+                    loaded = conn.execute("SELECT count(*) FROM documents").fetchone()
+                except psycopg.errors.UndefinedTable:
+                    loaded = None
+            if loaded == (4,):
+                break
+            time.sleep(0.05)
+
+    assert calls == 2
+    assert loaded == (4,)
 
 
 def test_missing_documents_directory_stops_startup(

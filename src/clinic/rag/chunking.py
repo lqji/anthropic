@@ -7,6 +7,8 @@ import re
 from dataclasses import dataclass
 
 MAX_CHUNK_WORDS = 200
+# Bump when the chunking rules change, so every document is re-chunked on the next start.
+CHUNKING_VERSION = 1
 
 _HEADING = re.compile(r"^#{1,6}\s+(.+?)(?:\s+#+)?$")
 

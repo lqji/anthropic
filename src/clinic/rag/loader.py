@@ -8,7 +8,7 @@ from pathlib import Path
 from psycopg import Connection
 from psycopg.rows import TupleRow
 
-from clinic.rag.chunking import ChunkingError, chunk_document
+from clinic.rag.chunking import CHUNKING_VERSION, MAX_CHUNK_WORDS, ChunkingError, chunk_document
 from clinic.repositories import knowledge
 
 logger = logging.getLogger("clinic.rag")
@@ -19,14 +19,17 @@ class LoadReport:
     loaded: list[str] = field(default_factory=list)
     unchanged: list[str] = field(default_factory=list)
     skipped: list[str] = field(default_factory=list)
+    removed: list[str] = field(default_factory=list)
 
 
 class KnowledgeLoader:
-    """Loads every `*.md` file in `docs_dir`.
+    """Loads every `*.md` file in `docs_dir`, so the database matches the good files on disk.
 
-    A file whose sha256 matches the stored one is left alone. A new or changed file has all its
-    chunks replaced in one transaction. A file that cannot be chunked is logged and skipped, so
-    one bad file never stops the others. Database errors propagate (startup should fail).
+    A file whose fingerprint matches the stored one is left alone. A new or changed file has all
+    its chunks replaced in one transaction. A file that cannot be chunked is logged and skipped,
+    so one bad file never stops the others. Documents of skipped or deleted files are removed:
+    answering "not covered" is safer than answering from text the clinic no longer publishes.
+    Database errors propagate.
     """
 
     def __init__(self, docs_dir: Path) -> None:
@@ -40,7 +43,7 @@ class KnowledgeLoader:
         for path in sorted(self._docs_dir.glob("*.md")):
             name = path.name
             raw = path.read_bytes()
-            sha256 = hashlib.sha256(raw).hexdigest()
+            sha256 = fingerprint(raw)
             if knowledge.get_document_sha(conn, name) == sha256:
                 report.unchanged.append(name)
                 continue
@@ -60,6 +63,10 @@ class KnowledgeLoader:
             )
             report.loaded.append(name)
 
+        report.removed = knowledge.delete_documents_except(conn, report.loaded + report.unchanged)
+        for name in report.removed:
+            logger.warning("knowledge.document_removed: %s", name, extra={"fields": {"file": name}})
+
         logger.info(
             "knowledge.loaded",
             extra={
@@ -67,10 +74,17 @@ class KnowledgeLoader:
                     "loaded": len(report.loaded),
                     "unchanged": len(report.unchanged),
                     "skipped": len(report.skipped),
+                    "removed": len(report.removed),
                 }
             },
         )
         return report
+
+
+def fingerprint(raw: bytes) -> str:
+    """sha256 of the file bytes and the chunking rules: either changing re-chunks the file."""
+    rules = f"chunking-v{CHUNKING_VERSION}:max-words-{MAX_CHUNK_WORDS}\n".encode()
+    return hashlib.sha256(rules + raw).hexdigest()
 
 
 def _decode(raw: bytes) -> str:

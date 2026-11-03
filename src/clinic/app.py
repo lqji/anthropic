@@ -1,4 +1,5 @@
 import logging
+import threading
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
@@ -21,12 +22,15 @@ from clinic.schema import apply_schema
 
 logger = logging.getLogger("clinic.startup")
 
+PREPARE_RETRY_S = 5.0
 
-def prepare_database(pool: ConnectionPool, settings: Settings) -> None:
-    """Create the tables and load the clinic documents.
 
-    An unreachable database is logged, not fatal, so the api still starts and /health reports
-    it; restart the api once the database is back. Any other error stops startup.
+def prepare_database(pool: ConnectionPool, settings: Settings) -> bool:
+    """Create the tables and load the clinic documents. True when done.
+
+    An unreachable database is logged and gives False, so the api still starts and /health can
+    report it. Any other error stops startup. Statements are bounded by the pool's
+    statement_timeout, which also covers waiting for locks.
     """
     try:
         with pool.connection() as conn:
@@ -37,6 +41,16 @@ def prepare_database(pool: ConnectionPool, settings: Settings) -> None:
             "startup.database_unavailable",
             extra={"fields": {"error": type(exc).__name__, "step": "schema_and_documents"}},
         )
+        return False
+    return True
+
+
+def keep_preparing(pool: ConnectionPool, settings: Settings, stop: threading.Event) -> None:
+    """Retry `prepare_database` until it succeeds or the app shuts down."""
+    while not stop.wait(PREPARE_RETRY_S):
+        if prepare_database(pool, settings):
+            logger.info("startup.database_prepared_after_retry")
+            return
 
 
 def create_app(settings: Settings) -> FastAPI:
@@ -47,13 +61,25 @@ def create_app(settings: Settings) -> FastAPI:
         pool = make_pool(settings)
         # Do not wait for the first connection: /health must be able to report a down database.
         pool.open(wait=False)
-        prepare_database(pool, settings)
+        stop_retry = threading.Event()
+        retry: threading.Thread | None = None
+        if not prepare_database(pool, settings):
+            retry = threading.Thread(
+                target=keep_preparing,
+                args=(pool, settings, stop_retry),
+                name="prepare-database",
+                daemon=True,
+            )
+            retry.start()
         app.state.deps = Deps(
             settings=settings, pool=pool, clock=SystemClock(), locks=ConversationLocks()
         )
         try:
             yield
         finally:
+            stop_retry.set()
+            if retry is not None:
+                retry.join(timeout=10)
             pool.close(timeout=5)
 
     app = FastAPI(title="Clinic Front-Desk Assistant", version=__version__, lifespan=lifespan)
