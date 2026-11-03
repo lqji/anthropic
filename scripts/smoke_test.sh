@@ -72,13 +72,27 @@ day_in_clinic() { # day_in_clinic <days from today> -> YYYY-MM-DD in clinic time
   TZ="$CLINIC_TIMEZONE" date -d "+$1 day" +%F 2>/dev/null || TZ="$CLINIC_TIMEZONE" date -v+"$1"d +%F
 }
 
+# find_pending <jq condition on one approval> -> id of the first pending approval that matches, or
+# nothing. The list is oldest first and paged, so a busy system is read page by page.
+find_pending() {
+  local offset=0 found
+  while [ "$offset" -lt 5000 ]; do
+    call GET "/api/v1/approvals?status=pending&limit=500&offset=$offset"
+    [ "$STATUS" = 200 ] || return 1
+    found="$(printf '%s' "$BODY" | jq -r "[.[] | select($1)][0].id // empty" 2>/dev/null)"
+    if [ -n "$found" ]; then printf '%s' "$found"; return 0; fi
+    [ "$(printf '%s' "$BODY" | jq 'length' 2>/dev/null)" = 500 ] || return 1
+    offset=$((offset + 500))
+  done
+  return 1
+}
+
 cleanup() { # on every exit: remove the temp file, and cancel the test booking if a check failed
   rm -f "$BODY_FILE"
   [ "$BOOKED" = 1 ] && [ -n "$CONVERSATION" ] || return 0
   echo "cleanup: cancelling the test booking" >&2
-  call GET "/api/v1/approvals?status=pending&limit=500"
   local approval
-  approval="$(printf '%s' "$BODY" | jq -r --arg id "$CONVERSATION" '[.[] | select(.conversation_id == $id)][0].id // empty' 2>/dev/null)"
+  approval="$(find_pending ".conversation_id == \"$CONVERSATION\"")"
   if [ -z "$approval" ]; then
     say "Cancel my appointment"
     approval="$(field '.approval_id // empty')"
@@ -166,9 +180,7 @@ expect_status "cancel request" 200
 expect_field "cancel request" '.status' awaiting_approval
 APPROVAL="$(field '.approval_id')"
 [ -n "$APPROVAL" ] && [ "$APPROVAL" != null ] || fail "cancel request" "no approval_id in the response"
-call GET "/api/v1/approvals?status=pending&limit=500"
-expect_status "pending approvals" 200
-[ "$(printf '%s' "$BODY" | jq --arg id "$APPROVAL" '[.[] | select(.id == $id)] | length')" = 1 ] \
+[ "$(find_pending ".id == \"$APPROVAL\"")" = "$APPROVAL" ] \
   || fail "pending approvals" "approval $APPROVAL is not in the pending list"
 say "Is it done yet?"
 expect_field "still waiting" '.outcome' still_waiting

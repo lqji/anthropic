@@ -131,10 +131,10 @@ A rollback is a deploy of the previous tag: the code and image change, the datab
 tag may not contain the smoke test, so copy it out of the checkout first and run the copy:
 
 ```bash
-cp scripts/smoke_test.sh /tmp/smoke_test.sh
+SMOKE="$(mktemp)" && cp scripts/smoke_test.sh "$SMOKE"
 git checkout <previous-tag>
 APP_VERSION=<previous-tag> docker compose up --build -d --wait
-/tmp/smoke_test.sh
+bash "$SMOKE"
 ```
 
 Both images stay on the VM (`docker image ls clinic-api`), so building the older tag again is fast
@@ -154,7 +154,7 @@ taken before the upgrade (**this discards everything saved since**). Save these 
 and run it with `bash -e restore.sh`, so that it stops at the first command that fails:
 
 ```bash
-cp scripts/smoke_test.sh /tmp/smoke_test.sh
+SMOKE="$(mktemp)" && cp scripts/smoke_test.sh "$SMOKE"
 # 1. Check the backup is complete, and keep the current data in case the restore fails.
 test -s backup-<date>.sql
 grep -q 'PostgreSQL database dump complete' backup-<date>.sql
@@ -166,7 +166,7 @@ docker compose exec -T db sh -c 'psql -v ON_ERROR_STOP=1 --single-transaction -U
 # 3. Deploy the old release.
 git checkout <previous-tag>
 APP_VERSION=<previous-tag> docker compose up --build -d --wait
-/tmp/smoke_test.sh
+bash "$SMOKE"
 ```
 
 If the restore fails, the script stops before the deploy and `backup-now.sql` is what you go back
