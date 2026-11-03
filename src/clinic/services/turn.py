@@ -9,3 +9,4 @@ class TurnResult:
     intent: str
     outcome: str
     status: str
+    approval_id: str | None = None  # set when the turn is now waiting for staff approval

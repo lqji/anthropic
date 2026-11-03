@@ -1,6 +1,6 @@
 import logging
 import threading
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 
 import psycopg
@@ -9,7 +9,7 @@ from fastapi import FastAPI
 from psycopg_pool import ConnectionPool
 
 from clinic import __version__
-from clinic.api import conversations, emergencies, health
+from clinic.api import approvals, conversations, emergencies, health
 from clinic.clock import SystemClock
 from clinic.config import Settings
 from clinic.db import make_pool
@@ -19,6 +19,7 @@ from clinic.locks import ConversationLocks
 from clinic.observability import configure_logging, install_request_logging
 from clinic.rag.loader import KnowledgeLoader
 from clinic.schema import apply_schema
+from clinic.services.approval import ApprovalResumer, ApprovalService, UnavailableResumer
 from clinic.services.conversation import ConversationWorkflow, UnavailableWorkflow
 
 logger = logging.getLogger("clinic.startup")
@@ -46,8 +47,13 @@ def prepare_database(pool: ConnectionPool, settings: Settings) -> bool:
     return True
 
 
-def keep_preparing(pool: ConnectionPool, settings: Settings, stop: threading.Event) -> None:
-    """Retry `prepare_database` until it succeeds or the app shuts down.
+def keep_preparing(
+    pool: ConnectionPool,
+    settings: Settings,
+    stop: threading.Event,
+    on_ready: Callable[[], None],
+) -> None:
+    """Retry `prepare_database` until it succeeds or the app shuts down, then run `on_ready`.
 
     Only an unreachable database is retried. Any other error (missing docs directory, SQL bug)
     will not fix itself: it is logged with its traceback as a structured line and retrying stops,
@@ -56,6 +62,8 @@ def keep_preparing(pool: ConnectionPool, settings: Settings, stop: threading.Eve
     while not stop.wait(PREPARE_RETRY_S):
         try:
             prepared = prepare_database(pool, settings)
+            if prepared:
+                on_ready()
         except Exception:
             logger.exception("startup.database_prepare_failed")
             return
@@ -64,8 +72,13 @@ def keep_preparing(pool: ConnectionPool, settings: Settings, stop: threading.Eve
             return
 
 
-def create_app(settings: Settings, workflow: ConversationWorkflow | None = None) -> FastAPI:
-    """`workflow` runs each conversation turn; until CFD-05 wires in its graph, turns get 503."""
+def create_app(
+    settings: Settings,
+    workflow: ConversationWorkflow | None = None,
+    approval_resumer: ApprovalResumer | None = None,
+) -> FastAPI:
+    """`workflow` runs each conversation turn and `approval_resumer` resumes it after a staff
+    decision. Until CFD-05 wires in its graph, both answer 503."""
     configure_logging()
 
     @asynccontextmanager
@@ -73,23 +86,32 @@ def create_app(settings: Settings, workflow: ConversationWorkflow | None = None)
         pool = make_pool(settings)
         # Do not wait for the first connection: /health must be able to report a down database.
         pool.open(wait=False)
-        stop_retry = threading.Event()
-        retry: threading.Thread | None = None
-        if not prepare_database(pool, settings):
-            retry = threading.Thread(
-                target=keep_preparing,
-                args=(pool, settings, stop_retry),
-                name="prepare-database",
-                daemon=True,
-            )
-            retry.start()
-        app.state.deps = Deps(
+        deps = Deps(
             settings=settings,
             pool=pool,
             clock=SystemClock(),
             locks=ConversationLocks(),
             workflow=workflow or UnavailableWorkflow(),
+            approval_resumer=approval_resumer or UnavailableResumer(),
         )
+
+        def on_ready() -> None:
+            # Decisions stored before a crash but never applied are resumed now.
+            ApprovalService(deps.pool, deps.clock, deps.locks, deps.approval_resumer).reconcile()
+
+        stop_retry = threading.Event()
+        retry: threading.Thread | None = None
+        if prepare_database(pool, settings):
+            on_ready()
+        else:
+            retry = threading.Thread(
+                target=keep_preparing,
+                args=(pool, settings, stop_retry, on_ready),
+                name="prepare-database",
+                daemon=True,
+            )
+            retry.start()
+        app.state.deps = deps
         try:
             yield
         finally:
@@ -104,4 +126,5 @@ def create_app(settings: Settings, workflow: ConversationWorkflow | None = None)
     app.include_router(health.router)
     app.include_router(conversations.router)
     app.include_router(emergencies.router)
+    app.include_router(approvals.router)
     return app
