@@ -55,14 +55,22 @@ Emergency flags for front-desk staff, newest first.
 A cancellation (and, from CFD-15, a same-day booking) waits for front-desk staff. The message
 that asks for it gets `status: "awaiting_approval"` and an `approval_id`. The conversation is then
 paused: every non-emergency message gets a "still waiting" reply (`outcome: "still_waiting"`)
-until staff decide, while emergencies are still answered. The pause survives a restart.
+until staff decide, while emergencies are still answered. The pause survives a restart. If the
+process dies right after the approval is saved and before the pause is checkpointed, the approval
+is still pending; when staff decide, the workflow is brought to its pause first and the decision
+is then applied once (no second approval is created).
 
 ### `GET /api/v1/approvals?status=pending`
-Approvals for staff, oldest first.
+Approvals for staff, oldest first, one page at a time.
 
 - `status`: `pending` (default), `approved` or `rejected`.
+- `limit`: page size, 1 to 500 (default 100). `offset`: how many to skip (default 0). To read
+  everything, ask for the next page (`offset += limit`) until a page comes back shorter than `limit`.
 - `200`: `[{"id": "<uuid>", "conversation_id": "<uuid>", "kind": "cancellation", "booking_id": 7, "status": "pending", "decided_by": null, "reason": null, "created_at": "...", "decided_at": null}]`
-- `422 validation_error`: any other `status`.
+- `422 validation_error`: any other `status`, or a `limit` or `offset` out of range.
+
+Approvals are audit records: deleting a conversation that has approvals is refused by the database
+(`ON DELETE RESTRICT`).
 
 ### `POST /api/v1/approvals/{id}/approve` and `POST /api/v1/approvals/{id}/reject`
 Decide an approval. The paused conversation resumes and the patient is told the result.

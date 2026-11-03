@@ -70,14 +70,35 @@ def pending_for_booking(
     return None if row is None else ApprovalRow(*row)
 
 
-def list_by_status(conn: Connection[TupleRow], status: str) -> list[ApprovalRow]:
+def open_for(
+    conn: Connection[TupleRow], conversation_id: UUID, kind: str, booking_id: int
+) -> ApprovalRow | None:
+    """The approval of this conversation and booking that has not resumed its workflow yet.
+
+    Pending, or decided but not resumed. `request_approval` uses it to reuse an approval whose
+    row was saved by a run that died before its checkpoint, instead of asking staff twice.
+    """
+    row = conn.execute(
+        "SELECT id, conversation_id, kind, booking_id, status, decided_by, reason,"
+        " decided_at, resumed_at, created_at"
+        " FROM approvals"
+        " WHERE conversation_id = %s AND kind = %s AND booking_id = %s AND resumed_at IS NULL"
+        " ORDER BY created_at DESC, id LIMIT 1",
+        (conversation_id, kind, booking_id),
+    ).fetchone()
+    return None if row is None else ApprovalRow(*row)
+
+
+def list_by_status(
+    conn: Connection[TupleRow], status: str, limit: int = 100, offset: int = 0
+) -> list[ApprovalRow]:
     """Approvals with the given status, oldest first (the order staff should handle them)."""
     rows = conn.execute(
         "SELECT id, conversation_id, kind, booking_id, status, decided_by, reason,"
         " decided_at, resumed_at, created_at"
         " FROM approvals"
-        " WHERE status = %s ORDER BY created_at, id",
-        (status,),
+        " WHERE status = %s ORDER BY created_at, id LIMIT %s OFFSET %s",
+        (status, limit, offset),
     ).fetchall()
     return [ApprovalRow(*row) for row in rows]
 

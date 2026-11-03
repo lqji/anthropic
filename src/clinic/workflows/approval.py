@@ -57,6 +57,9 @@ class ApprovalState(TypedDict, total=False):
     booking_id: int | None
     booking_label: str | None
     approval_id: str | None
+    # The approval whose decision `apply_decision` applied. `approval_id` is cleared then, so
+    # this is what tells a finished turn which approval it belongs to.
+    decided_approval_id: str | None
     decision: str | None
     decision_reason: str | None
     reply: str
@@ -134,9 +137,15 @@ class ApprovalNodes:
         label = state.get("booking_label") or ""
         try:
             with self._pool.connection() as conn:
-                approvals.create(
-                    conn, approval_id, conversation_id, kind, booking_id, self._clock.now()
-                )
+                open_approval = approvals.open_for(conn, conversation_id, kind, booking_id)
+                if open_approval is None:
+                    approvals.create(
+                        conn, approval_id, conversation_id, kind, booking_id, self._clock.now()
+                    )
+                else:
+                    # An earlier run of this node saved the approval, then the process died before
+                    # the checkpoint. Reuse it: a second approval would ask staff twice.
+                    approval_id = open_approval.id
                 conversations.set_status(conn, conversation_id, "awaiting_approval")
         except psycopg.errors.UniqueViolation:
             # Another conversation asked for the same booking a moment ago.
@@ -164,6 +173,9 @@ class ApprovalNodes:
         decision = state.get("decision")
         label = state.get("booking_label") or ""
         booking_id = state.get("booking_id")
+        if decision not in (APPROVED, REJECTED):
+            # Never read an unknown value as a rejection (or an approval).
+            raise ValueError(f"unknown decision {decision!r}")
         if kind == CANCELLATION and booking_id is not None:
             if decision == APPROVED:
                 self._bookings.cancel(booking_id)
@@ -179,6 +191,7 @@ class ApprovalNodes:
             "outcome": outcome,
             "status": "active",
             "approval_kind": None,
+            "decided_approval_id": state.get("approval_id"),
             "approval_id": None,
             "booking_id": None,
             "booking_label": None,
@@ -218,8 +231,11 @@ class GraphApprovalResumer:
     """Resumes the conversation graph paused at `await_approval` with Command(resume=...).
 
     Safe to call again for the same approval: it looks at where the saved checkpoint stands, so a
-    decision is never applied twice and a half-finished resume is completed.
+    decision is never applied twice, a half-finished resume is completed, and a graph that never
+    reached its pause is brought there first.
     """
+
+    MAX_STEPS = 3  # advance to the pause, hand over the decision, read the result
 
     def __init__(self, graph: CheckpointedGraph) -> None:
         self._graph = graph
@@ -228,22 +244,41 @@ class GraphApprovalResumer:
         self, conversation_id: str, approval_id: str, decision: str, reason: str
     ) -> ApprovalOutcome:
         config: RunnableConfig = {"configurable": {"thread_id": conversation_id}}
-        snapshot = self._graph.get_state(config)
-        if "await_approval" in snapshot.next:
-            # Still paused: hand the decision to the graph.
-            if snapshot.values.get("approval_id") != approval_id:
-                raise RuntimeError("the conversation is waiting for a different approval")
-            values = self._graph.invoke(
-                Command(resume={"decision": decision, "reason": reason}), config
-            )
-        elif snapshot.next:
-            # The decision was handed over, but a later node failed (for example `apply_decision`
-            # could not cancel the booking). The checkpoint is saved just before that node, so
-            # invoking with no input runs the remaining nodes. Returning the stored values here
-            # would be wrong: they still hold the "waiting for approval" reply.
-            values = self._graph.invoke(None, config)
-        else:
+        for _ in range(self.MAX_STEPS):
+            snapshot = self._graph.get_state(config)
+            waiting = snapshot.next
+            if "await_approval" in waiting:
+                # Paused: hand the decision to the graph.
+                _same_approval(snapshot.values.get("approval_id"), approval_id)
+                values = self._graph.invoke(
+                    Command(resume={"decision": decision, "reason": reason}), config
+                )
+                return _outcome(values)
+            if "apply_decision" in waiting:
+                # The decision was handed over, but `apply_decision` failed (for example it could
+                # not cancel the booking). The checkpoint is saved just before that node, so
+                # invoking with no input runs it again.
+                _same_approval(snapshot.values.get("approval_id"), approval_id)
+                return _outcome(self._graph.invoke(None, config))
+            if waiting:
+                # The graph never reached its pause: the process died after `request_approval`
+                # saved the approval but before the checkpoint. The decision cannot be handed
+                # over yet, and treating it as handed over would return the stale "waiting for
+                # approval" reply and never apply it. Run the missing steps up to the pause
+                # (`request_approval` reuses the saved approval), then look again.
+                self._graph.invoke(None, config)
+                continue
             # The graph already finished (the process died before the bookkeeping): do not apply
-            # the decision a second time.
-            values = snapshot.values
-        return ApprovalOutcome(reply=str(values["reply"]), outcome=str(values["outcome"]))
+            # the decision a second time, but make sure the result is this approval's.
+            _same_approval(snapshot.values.get("decided_approval_id"), approval_id)
+            return _outcome(snapshot.values)
+        raise RuntimeError("the conversation did not reach its approval pause")
+
+
+def _same_approval(actual: object, expected: str) -> None:
+    if actual != expected:
+        raise RuntimeError("the conversation belongs to a different approval")
+
+
+def _outcome(values: dict[str, Any]) -> ApprovalOutcome:
+    return ApprovalOutcome(reply=str(values["reply"]), outcome=str(values["outcome"]))

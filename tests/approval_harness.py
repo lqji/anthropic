@@ -83,11 +83,18 @@ class FakeBookings:
         return self.bookings[booking_id].status
 
 
+class ProcessDied(RuntimeError):
+    """Stands for the process being killed at an awkward moment."""
+
+
 class Harness:
     def __init__(self, saver: PostgresSaver, pool: ConnectionPool, bookings: FakeBookings) -> None:
         self.bookings = bookings
         self.route_calls = 0
         self.target_date_override: str | None = None  # feeds the graph a malformed date
+        # The process dies after request_approval saved its row but before LangGraph wrote the
+        # checkpoint: the approval exists, but the graph never reached its pause.
+        self.crash_after_request_approval = False
         self.patient_ref = (
             PATIENT  # who the next turn is from (CFD-05 reads it from the conversation)
         )
@@ -95,7 +102,7 @@ class Harness:
         builder = StateGraph(HarnessState)
         builder.add_node("route", self.route)
         builder.add_node("cancel", nodes.cancel)
-        builder.add_node("request_approval", nodes.request_approval)
+        builder.add_node("request_approval", self.request_approval)
         builder.add_node("await_approval", nodes.await_approval)
         builder.add_node("apply_decision", nodes.apply_decision)
         builder.add_edge(START, "route")
@@ -106,6 +113,13 @@ class Harness:
         builder.add_edge("apply_decision", END)
         self.graph = builder.compile(checkpointer=saver)
         self.resumer = GraphApprovalResumer(self.graph)
+
+    def request_approval(self, state: HarnessState) -> dict[str, object]:
+        update = self.nodes.request_approval(state)
+        if self.crash_after_request_approval:
+            self.crash_after_request_approval = False
+            raise ProcessDied("the process died after saving the approval")
+        return update
 
     def route(self, state: HarnessState) -> dict[str, object]:
         """Stand-in for CFD-05 routing and CFD-07 intent/date extraction."""

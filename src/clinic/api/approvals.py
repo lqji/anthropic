@@ -2,7 +2,7 @@ from datetime import datetime
 from typing import Annotated, Literal
 from uuid import UUID
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel, StringConstraints
 
 from clinic.api.deps import get_deps
@@ -10,6 +10,9 @@ from clinic.deps import Deps
 from clinic.services.approval import ApprovalService, DecisionResult
 
 router = APIRouter(prefix="/api/v1/approvals", tags=["approvals"])
+
+DEFAULT_PAGE_SIZE = 100
+MAX_PAGE_SIZE = 500
 
 DecidedBy = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=100)]
 Reason = Annotated[str, StringConstraints(strip_whitespace=True, min_length=3, max_length=500)]
@@ -47,9 +50,12 @@ Service = Annotated[ApprovalService, Depends(get_service)]
 
 @router.get("")
 def list_approvals(
-    service: Service, status: Literal["pending", "approved", "rejected"] = "pending"
+    service: Service,
+    status: Literal["pending", "approved", "rejected"] = "pending",
+    limit: Annotated[int, Query(ge=1, le=MAX_PAGE_SIZE)] = DEFAULT_PAGE_SIZE,
+    offset: Annotated[int, Query(ge=0)] = 0,
 ) -> list[ApprovalOut]:
-    """Approvals for front-desk staff, oldest first."""
+    """Approvals for front-desk staff, oldest first, one page at a time."""
     return [
         ApprovalOut(
             id=row.id,
@@ -62,7 +68,7 @@ def list_approvals(
             created_at=row.created_at,
             decided_at=row.decided_at,
         )
-        for row in service.list_by_status(status)
+        for row in service.list_by_status(status, limit, offset)
     ]
 
 

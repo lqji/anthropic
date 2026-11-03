@@ -2,7 +2,7 @@ import logging
 import threading
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -10,10 +10,12 @@ import psycopg
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from psycopg import sql
+from psycopg.conninfo import make_conninfo
 
 from clinic.config import Settings
 from clinic.errors import WorkflowUnavailable
-from clinic.repositories import approvals
+from clinic.repositories import approvals, conversations
 from clinic.schema import apply_schema
 from clinic.workflows.approval import ApprovalState
 from tests.approval_harness import FakeBookings, running_app
@@ -588,3 +590,120 @@ def test_resume_errors_that_are_already_503s_keep_their_code(
         assert _approval(settings, approval_id).resumed_at is None  # saved, not finished
         bookings.cancel_error = None
         assert _approve(client, approval_id).status_code == 200  # the same retry finishes it
+
+
+# --- Review findings (lqji): crash window, identity checks, decisions, paging, audit rows ----
+
+
+def _count_approvals(settings: Settings) -> int:
+    with psycopg.connect(settings.database_url) as conn:
+        row = conn.execute("SELECT count(*) FROM approvals").fetchone()
+    assert row is not None
+    return int(row[0])
+
+
+def test_crash_between_the_approval_row_and_the_checkpoint_is_recovered(
+    settings: Settings, bookings: FakeBookings
+) -> None:
+    with running_app(settings, bookings) as (client, harness):
+        conversation_id = _start(client)
+        harness.crash_after_request_approval = True
+        crashed = client.post(
+            f"/api/v1/conversations/{conversation_id}/messages", json={"text": CANCEL}
+        )
+        assert crashed.status_code == 500  # the turn died, as a killed process would
+        # The approval was saved, but the graph never reached its pause.
+        [pending] = _pending(client)
+        assert harness.paused_at(conversation_id) == ("request_approval",)
+
+        response = _approve(client, pending["id"])
+
+        assert response.status_code == 200
+        assert response.json()["patient_message"] == f"Your appointment {LABEL} has been cancelled."
+        assert bookings.status(7) == "cancelled"  # the decision was really applied
+        assert bookings.cancel_calls == [7]
+        assert _count_approvals(settings) == 1  # no second approval was created
+        assert _approval(settings, pending["id"]).resumed_at is not None
+        assert harness.paused_at(conversation_id) == ()
+
+
+def test_the_finished_turn_of_another_approval_is_never_returned(
+    settings: Settings, bookings: FakeBookings
+) -> None:
+    with running_app(settings, bookings) as (client, harness):
+        conversation_id, approval_id = _request_cancellation(client)
+        assert _approve(client, approval_id).status_code == 200  # the graph has finished
+
+        with pytest.raises(RuntimeError, match="different approval"):
+            harness.resumer.resume(conversation_id, str(uuid4()), "approved", "fine")
+
+
+def test_apply_decision_rejects_an_unknown_decision(
+    settings: Settings, bookings: FakeBookings
+) -> None:
+    with running_app(settings, bookings) as (_, harness):
+        state = ApprovalState(
+            approval_kind="cancellation", booking_id=7, booking_label=LABEL, decision="maybe"
+        )
+
+        with pytest.raises(ValueError, match="maybe"):
+            harness.nodes.apply_decision(state)
+
+        assert bookings.cancel_calls == []  # an unknown decision is not read as a rejection
+
+
+def test_approvals_list_is_paginated(settings: Settings, bookings: FakeBookings) -> None:
+    with running_app(settings, bookings) as (client, _):
+        first = datetime(2026, 11, 3, 9, 0, tzinfo=UTC)
+        ids: list[str] = []
+        with psycopg.connect(settings.database_url, autocommit=True) as conn:
+            for n in range(3):
+                approval_id = uuid4()
+                approvals.create(
+                    conn,
+                    approval_id,
+                    UUID(_start(client)),
+                    "cancellation",
+                    100 + n,
+                    first + timedelta(minutes=n),
+                )
+                ids.append(str(approval_id))
+
+        def listed(**params: int) -> list[str]:
+            response = client.get("/api/v1/approvals", params=params)
+            assert response.status_code == 200
+            return [row["id"] for row in response.json()]
+
+        assert listed() == ids  # oldest first, all of them by default
+        assert listed(limit=2) == ids[:2]
+        assert listed(limit=2, offset=2) == ids[2:]
+        for bad in ({"limit": 0}, {"limit": 501}, {"offset": -1}):
+            assert client.get("/api/v1/approvals", params=bad).status_code == 422
+
+
+def test_deleting_a_conversation_with_an_approval_is_refused(database_url: str) -> None:
+    """The audit rows must outlive any clean-up of conversations. A throwaway database keeps the
+    check independent of tables created by older runs."""
+    name = f"clinic_audit_{uuid4().hex[:8]}"
+    with psycopg.connect(database_url, autocommit=True, connect_timeout=5) as admin:
+        admin.execute(sql.SQL("CREATE DATABASE {}").format(sql.Identifier(name)))
+    try:
+        with psycopg.connect(
+            make_conninfo(database_url, dbname=name), autocommit=True, connect_timeout=5
+        ) as conn:
+            apply_schema(conn)
+            now = datetime.now(UTC)
+            conversation_id = uuid4()
+            conversations.create(conn, conversation_id, "demo-patient-1", now)
+            approvals.create(conn, uuid4(), conversation_id, "cancellation", 7, now)
+
+            with pytest.raises(psycopg.errors.ForeignKeyViolation):
+                conn.execute("DELETE FROM conversations WHERE id = %s", (conversation_id,))
+
+            row = conn.execute("SELECT count(*) FROM approvals").fetchone()
+            assert row == (1,)
+    finally:
+        with psycopg.connect(database_url, autocommit=True, connect_timeout=5) as admin:
+            admin.execute(
+                sql.SQL("DROP DATABASE IF EXISTS {} WITH (FORCE)").format(sql.Identifier(name))
+            )

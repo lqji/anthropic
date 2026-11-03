@@ -57,9 +57,9 @@ class ApprovalService:
         self._locks = locks
         self._resumer = resumer
 
-    def list_by_status(self, status: str) -> list[ApprovalRow]:
+    def list_by_status(self, status: str, limit: int = 100, offset: int = 0) -> list[ApprovalRow]:
         with self._pool.connection() as conn:
-            return approvals.list_by_status(conn, status)
+            return approvals.list_by_status(conn, status, limit, offset)
 
     def decide(
         self, approval_id: str, decision: str, decided_by: str, reason: str
