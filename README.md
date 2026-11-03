@@ -110,16 +110,16 @@ APP_VERSION=<tag> docker compose up --build -d --wait
 scripts/smoke_test.sh                           # http://localhost:8000, or pass another base URL
 ```
 
-On a live system use `SKIP_EMERGENCY=1 scripts/smoke_test.sh`: the emergency check would leave a
-flag in the staff list that nobody can close.
+On a live system use `SKIP_EMERGENCY=1 scripts/smoke_test.sh`. The emergency check leaves a flag
+in the staff list that no endpoint can close (its text starts with "SMOKE TEST" so staff can tell
+it apart).
 
 `--wait` returns only when both services are healthy. The smoke test then walks through every
 feature: health, a clinic question, a question the documents do not cover, a booking, a
 cancellation that waits for staff, and an emergency. It prints one `ok` line per check, stops at
 the first failure with the check name and the response, and exits 1 (it exits 0 only if every check
-passed). Run it after every deploy. Its emergency check leaves a flag in the staff list that no
-endpoint can close; the flag text starts with "SMOKE TEST" so staff can tell it apart, and
-`SKIP_EMERGENCY=1 scripts/smoke_test.sh` leaves that check out on a live system.
+passed). Run it after every deploy. If it fails after the booking step, that test slot (patient
+`smoke-test-…`) stays booked until you free it or reset the demo data.
 
 The database lives in the `pgdata` volume, so a normal deploy keeps all data. **First deploy or a
 clean demo:** `docker compose down -v` deletes the volume, and the demo slots are seeded again for
@@ -127,12 +127,14 @@ the next 5 days. Never run `down -v` on data you want to keep.
 
 ### Roll back
 
-A rollback is a deploy of the previous tag: the code and image change, the database stays.
+A rollback is a deploy of the previous tag: the code and image change, the database stays. An older
+tag may not contain the smoke test, so copy it out of the checkout first and run the copy:
 
 ```bash
+cp scripts/smoke_test.sh /tmp/smoke_test.sh
 git checkout <previous-tag>
 APP_VERSION=<previous-tag> docker compose up --build -d --wait
-scripts/smoke_test.sh
+/tmp/smoke_test.sh
 ```
 
 Both images stay on the VM (`docker image ls clinic-api`), so building the older tag again is fast
@@ -148,25 +150,27 @@ needed.
 ```
 
 To go back to an older release whose code does not work with the newer schema, restore the backup
-taken before the upgrade (**this discards everything saved since**):
+taken before the upgrade (**this discards everything saved since**). Save these commands in a file
+and run it with `bash -e restore.sh`, so that it stops at the first command that fails:
 
 ```bash
+cp scripts/smoke_test.sh /tmp/smoke_test.sh
 # 1. Check the backup is complete, and keep the current data in case the restore fails.
-test -s backup-<date>.sql && grep -q 'PostgreSQL database dump complete' backup-<date>.sql
+test -s backup-<date>.sql
+grep -q 'PostgreSQL database dump complete' backup-<date>.sql
 (umask 077; docker compose exec -T db sh -c 'pg_dump -U "$POSTGRES_USER" "$POSTGRES_DB"' > backup-now.sql)
-# 2. Replace the database with the backup.
+# 2. Replace the database with the backup (one transaction, stops at the first SQL error).
 docker compose down -v                      # deletes the database volume
 docker compose up -d --wait db              # a new, empty database
-docker compose exec -T db sh -c 'psql -U "$POSTGRES_USER" "$POSTGRES_DB"' < backup-<date>.sql
+docker compose exec -T db sh -c 'psql -v ON_ERROR_STOP=1 --single-transaction -U "$POSTGRES_USER" "$POSTGRES_DB"' < backup-<date>.sql
 # 3. Deploy the old release.
 git checkout <previous-tag>
 APP_VERSION=<previous-tag> docker compose up --build -d --wait
-scripts/smoke_test.sh
+/tmp/smoke_test.sh
 ```
 
-Step 1 stops at the first command that fails (check the output before going on), and
-`backup-now.sql` is what you go back to if the restore does not work. Delete both files when you
-no longer need them.
+If the restore fails, the script stops before the deploy and `backup-now.sql` is what you go back
+to. Delete both backup files when you no longer need them.
 
 ### If something is wrong
 
