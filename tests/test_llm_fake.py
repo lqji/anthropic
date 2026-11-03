@@ -1,5 +1,6 @@
 from collections.abc import Callable
 from datetime import date
+from typing import get_args
 
 import pytest
 
@@ -7,20 +8,28 @@ from clinic.config import Settings
 from clinic.errors import LLMUnavailable
 from clinic.llm import (
     AnswerResult,
+    ClassifyContext,
     ClassifyResult,
     FakeLLM,
+    Intent,
     OpenAILLM,
     Passage,
     ScriptedFakeLLM,
     make_llm,
 )
+from clinic.workflows.state import INTENTS
 
 MONDAY = date(2026, 11, 2)
+CONTEXT = ClassifyContext(
+    today=MONDAY,
+    doctors=("Dr. Salma Nasser", "Dr. Khalid Rahman"),
+    specialties=("Dermatology", "General Practice"),
+)
 
 
 def test_fake_classify_is_deterministic(fake_llm: FakeLLM) -> None:
     text = "When is Dr. Salma free on Thursday?"
-    results = [fake_llm.classify(text, MONDAY) for _ in range(3)]
+    results = [fake_llm.classify(text, CONTEXT) for _ in range(3)]
     assert results[0].intent == "find_slots"
     assert results[0].doctor == "Dr. Salma Nasser"
     assert results[0].date == "2026-11-05"
@@ -32,8 +41,8 @@ def test_fake_classify_is_deterministic(fake_llm: FakeLLM) -> None:
     [
         ("I want to cancel my appointment", "cancel"),
         ("Please book me with Dr. Salma tomorrow", "book"),
-        ("What are your opening hours?", "ask_clinic"),
-        ("What is the cancellation policy?", "ask_clinic"),
+        ("What are your opening hours?", "clinic_question"),
+        ("What is the cancellation policy?", "clinic_question"),
         ("Any slots on Friday?", "find_slots"),
         ("hello", "other"),
         ("asdf qwer", "unclear"),
@@ -41,7 +50,19 @@ def test_fake_classify_is_deterministic(fake_llm: FakeLLM) -> None:
     ],
 )
 def test_fake_classify_intents(fake_llm: FakeLLM, text: str, intent: str) -> None:
-    assert fake_llm.classify(text, MONDAY).intent == intent
+    assert fake_llm.classify(text, CONTEXT).intent == intent
+
+
+def test_fake_classify_reads_the_catalogue_from_the_context(fake_llm: FakeLLM) -> None:
+    result = fake_llm.classify("Any slots in Dermatology with Dr. Khalid on Friday?", CONTEXT)
+    assert result.doctor == "Dr. Khalid Rahman"
+    assert result.specialty == "Dermatology"
+    assert result.date == "2026-11-06"
+
+
+def test_fake_classify_returns_an_unlisted_doctor_as_written(fake_llm: FakeLLM) -> None:
+    result = fake_llm.classify("Book me with Dr. Zaid tomorrow", CONTEXT)
+    assert (result.intent, result.doctor) == ("book", "Dr. Zaid")
 
 
 def test_fake_answer_names_the_best_passage(fake_llm: FakeLLM) -> None:
@@ -66,17 +87,17 @@ def test_scripted_fake_returns_in_order_and_records_calls() -> None:
     llm = ScriptedFakeLLM(
         classify=[first, LLMUnavailable("down")], answer=[AnswerResult(found=False)]
     )
-    assert llm.classify("one", MONDAY) == first
+    assert llm.classify("one", CONTEXT) == first
     with pytest.raises(LLMUnavailable):
-        llm.classify("two", MONDAY)
+        llm.classify("two", CONTEXT)
     assert llm.answer("q", [Passage(source="s", text="t")]).found is False
-    assert llm.classify_calls == [("one", MONDAY), ("two", MONDAY)]
+    assert llm.classify_calls == [("one", CONTEXT), ("two", CONTEXT)]
     assert llm.answer_calls == [("q", (Passage(source="s", text="t"),))]
 
 
 def test_scripted_fake_fails_loudly_when_script_runs_out() -> None:
     with pytest.raises(AssertionError, match="classify"):
-        ScriptedFakeLLM().classify("x", MONDAY)
+        ScriptedFakeLLM().classify("x", CONTEXT)
 
 
 def test_make_llm_returns_fake_for_fake_provider(make_settings: Callable[..., Settings]) -> None:
@@ -88,3 +109,7 @@ def test_make_llm_returns_openai_adapter_for_openai_provider(
 ) -> None:
     settings = make_settings(llm_provider="openai", openai_api_key="sk-test-not-real")
     assert isinstance(make_llm(settings), OpenAILLM)
+
+
+def test_port_intents_are_the_ones_the_workflow_routes() -> None:
+    assert set(get_args(Intent)) == set(INTENTS)

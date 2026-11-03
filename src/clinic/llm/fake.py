@@ -3,11 +3,9 @@ import re
 from collections import deque
 from collections.abc import Sequence
 
+from clinic.domain.catalogue import name_tokens
 from clinic.domain.dates import resolve_date
-from clinic.llm.port import AnswerResult, ClassifyResult, Intent, Passage
-
-# Seed doctors. CFD-12 owns the doctors table; this list only drives the deterministic fake.
-KNOWN_DOCTORS = ("Dr. Salma Nasser",)
+from clinic.llm.port import AnswerResult, ClassifyContext, ClassifyResult, Intent, Passage
 
 _WORD = re.compile(r"[a-z']+")
 _STOPWORDS = frozenset(
@@ -39,12 +37,21 @@ def _words(text: str) -> set[str]:
     return set(_WORD.findall(text.lower()))
 
 
-def _find_doctor(words: set[str]) -> str | None:
-    for name in KNOWN_DOCTORS:
-        parts = {part for part in _WORD.findall(name.lower()) if part != "dr"}
-        if parts & words:
-            return name
-    return None
+_DOCTOR_TITLE = re.compile(r"\bdr\.?\s+([a-z]+)")
+
+
+def _find_doctor(text: str, words: set[str], doctors: Sequence[str]) -> str | None:
+    """A catalogue doctor whose name the text mentions, else "Dr. X" for an unlisted "Dr X"."""
+    listed = [name for name in doctors if name_tokens(name) & words]
+    if len(listed) == 1:
+        return listed[0]
+    unlisted = _DOCTOR_TITLE.search(text.lower())
+    return f"Dr. {unlisted[1].capitalize()}" if unlisted and not listed else None
+
+
+def _find_specialty(text: str, specialties: Sequence[str]) -> str | None:
+    lowered = text.lower()
+    return next((name for name in specialties if name.lower() in lowered), None)
 
 
 def _intent(words: set[str], doctor: str | None, resolved: dt.date | None) -> Intent:
@@ -55,7 +62,7 @@ def _intent(words: set[str], doctor: str | None, resolved: dt.date | None) -> In
     if words & _BOOK:
         return "book"
     if words & _ASK_CLINIC:
-        return "ask_clinic"
+        return "clinic_question"
     if words & _FIND_SLOTS or (doctor and resolved):
         return "find_slots"
     if words & _GREETING:
@@ -66,14 +73,16 @@ def _intent(words: set[str], doctor: str | None, resolved: dt.date | None) -> In
 class FakeLLM:
     """Deterministic stand-in for the model: keyword rules, same answer on every run."""
 
-    def classify(self, text: str, today: dt.date) -> ClassifyResult:
+    def classify(self, text: str, context: ClassifyContext) -> ClassifyResult:
         words = _words(text)
-        doctor = _find_doctor(words)
-        resolved = resolve_date(text, today)
+        doctor = _find_doctor(text, words, context.doctors)
+        specialty = _find_specialty(text, context.specialties)
+        resolved = resolve_date(text, context.today)
         intent = _intent(words, doctor, resolved)
         return ClassifyResult(
             intent=intent,
             doctor=doctor,
+            specialty=specialty,
             date=resolved.isoformat() if resolved else None,
             confidence=0.0 if intent == "unclear" else 1.0,
         )
@@ -110,11 +119,11 @@ class ScriptedFakeLLM:
     ) -> None:
         self._classify: deque[ClassifyResult | Exception] = deque(classify)
         self._answer: deque[AnswerResult | Exception] = deque(answer)
-        self.classify_calls: list[tuple[str, dt.date]] = []
+        self.classify_calls: list[tuple[str, ClassifyContext]] = []
         self.answer_calls: list[tuple[str, tuple[Passage, ...]]] = []
 
-    def classify(self, text: str, today: dt.date) -> ClassifyResult:
-        self.classify_calls.append((text, today))
+    def classify(self, text: str, context: ClassifyContext) -> ClassifyResult:
+        self.classify_calls.append((text, context))
         return _next(self._classify, "classify")
 
     def answer(self, question: str, passages: Sequence[Passage]) -> AnswerResult:

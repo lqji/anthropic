@@ -1,12 +1,22 @@
 from clinic.config import Settings
 from clinic.llm.fake import FakeLLM, ScriptedFakeLLM
 from clinic.llm.openai_adapter import OpenAILLM
-from clinic.llm.port import AnswerResult, ClassifyResult, Intent, LLMPort, Passage
+from clinic.llm.port import (
+    AnswerResult,
+    ClassifyContext,
+    ClassifyResult,
+    HistoryMessage,
+    Intent,
+    LLMPort,
+    Passage,
+)
 
 __all__ = [
     "AnswerResult",
+    "ClassifyContext",
     "ClassifyResult",
     "FakeLLM",
+    "HistoryMessage",
     "Intent",
     "LLMPort",
     "OpenAILLM",

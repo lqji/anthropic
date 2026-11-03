@@ -121,16 +121,17 @@ def create_app(settings: Settings, *, clock: Clock | None = None) -> FastAPI:
         # Do not wait for the first connection: /health must be able to report a down database.
         pool.open(wait=False)
         checkpoint_pool.open(wait=False)
+        llm = make_llm(settings)
         app.state.deps = Deps(
             settings=settings,
             pool=pool,
             clock=app_clock,
             locks=ConversationLocks(),
-            llm=make_llm(settings),
+            llm=llm,
             graph=build_graph(
                 settings,
                 PostgresSaver(checkpoint_pool),
-                WorkflowDeps(settings=settings, pool=pool, clock=app_clock),
+                WorkflowDeps(settings=settings, pool=pool, clock=app_clock, llm=llm),
             ),
         )
         try:

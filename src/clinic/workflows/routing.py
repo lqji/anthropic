@@ -11,6 +11,8 @@ from clinic.workflows.state import (
     CLINIC_QUESTION,
     FIND_SLOTS,
     OTHER,
+    UNKNOWN_DOCTOR,
+    UNKNOWN_SPECIALTY,
     ConversationState,
 )
 
@@ -62,7 +64,17 @@ def route_start(
 
 
 def route_intent(state: ConversationState, min_confidence: float) -> IntentRoute:
-    """Node for the classified intent. Unclear, unknown or low-confidence intents get a question."""
+    """Node for the classified intent.
+
+    Unclear, unknown or low-confidence intents get a question. So do `find_slots` and `book` that
+    name a doctor or specialty missing from the catalogue: the patient is asked which one.
+    """
     if state.get("confidence", 0.0) < min_confidence:
         return "clarify"
-    return _NODE_FOR_INTENT.get(state.get("intent", ""), "clarify")
+    node = _NODE_FOR_INTENT.get(state.get("intent", ""), "clarify")
+    entities = state.get("entities", {})
+    if node in ("find_slots", "book") and (
+        UNKNOWN_DOCTOR in entities or UNKNOWN_SPECIALTY in entities
+    ):
+        return "clarify"
+    return node
