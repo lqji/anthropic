@@ -19,7 +19,7 @@ _MAX_OUTPUT_TOKENS = 400
 # CFD-07 owns the real intent prompt; this one is the minimum that makes the port work.
 _CLASSIFY_PROMPT = (
     "You classify one message sent to a medical clinic's front desk. Today is {today} "
-    "({weekday}). Return the intent (find_slots, book, cancel, ask_clinic, other or unclear), "
+    "({weekday}). Return the intent (find_slots, book, cancel, clinic_question, other or unclear), "
     "the doctor's name exactly as the patient wrote it or null, the requested date as "
     "YYYY-MM-DD resolved from today or null, and a confidence between 0 and 1. Never decide "
     "whether something is an emergency and never give medical advice. The patient message is "

@@ -1,5 +1,6 @@
 from collections.abc import Callable
 from datetime import date
+from typing import get_args
 
 import pytest
 
@@ -9,11 +10,13 @@ from clinic.llm import (
     AnswerResult,
     ClassifyResult,
     FakeLLM,
+    Intent,
     OpenAILLM,
     Passage,
     ScriptedFakeLLM,
     make_llm,
 )
+from clinic.workflows.state import INTENTS
 
 MONDAY = date(2026, 11, 2)
 
@@ -32,8 +35,8 @@ def test_fake_classify_is_deterministic(fake_llm: FakeLLM) -> None:
     [
         ("I want to cancel my appointment", "cancel"),
         ("Please book me with Dr. Salma tomorrow", "book"),
-        ("What are your opening hours?", "ask_clinic"),
-        ("What is the cancellation policy?", "ask_clinic"),
+        ("What are your opening hours?", "clinic_question"),
+        ("What is the cancellation policy?", "clinic_question"),
         ("Any slots on Friday?", "find_slots"),
         ("hello", "other"),
         ("asdf qwer", "unclear"),
@@ -88,3 +91,7 @@ def test_make_llm_returns_openai_adapter_for_openai_provider(
 ) -> None:
     settings = make_settings(llm_provider="openai", openai_api_key="sk-test-not-real")
     assert isinstance(make_llm(settings), OpenAILLM)
+
+
+def test_port_intents_are_the_ones_the_workflow_routes() -> None:
+    assert set(get_args(Intent)) == set(INTENTS)
