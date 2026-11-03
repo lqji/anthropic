@@ -67,7 +67,7 @@ All settings are environment variables; the service refuses to start and names e
 | `RAG_MIN_SCORE`, `RAG_TOP_K` | `0.30`, `3` | Minimum score and number of document sections used to answer. |
 | `CLINIC_DOCS_DIR` | `seed/clinic_docs` | Markdown documents loaded at startup. |
 | `LANGGRAPH_STRICT_MSGPACK` | `true` | Keep `true`: checkpoints may only hold plain data. |
-| `APP_VERSION` | `dev` | Names the image (`clinic-api:<version>`); pass it on the command line, not in `.env`. `/health` reports the version of the code (`src/clinic/__init__.py`), so it cannot disagree with what is running. |
+| `APP_VERSION` | `dev` | Names the image (`clinic-api:<version>`); pass it on the command line, not in `.env`. `/health` reports the version of the code (`src/clinic/__init__.py`) whatever this says, so it cannot disagree with what is running. |
 
 ## Deploy and roll back
 
@@ -114,13 +114,9 @@ The emergency check is left out by default, because it leaves a flag in the staf
 endpoint can close. On a demo or staging system add it with `RUN_EMERGENCY=1 scripts/smoke_test.sh`
 (the flag text starts with "SMOKE TEST" so staff can tell it apart).
 
-If your `.env` was copied from an older `.env.example`, it may still contain an `APP_VERSION=` line.
-That value would override the version of the code in `/health`. Remove it once:
-`sed -i '/^APP_VERSION=/d' .env`.
-
 `<version>` is the tag without the leading `v` (tag `v0.1.0` is version `0.1.0`). It only names the
 image (`clinic-api:0.1.0`), so that two releases can sit side by side for a rollback. `/health`
-reports the version of the code you built, so check it after a deploy: it should match the tag.
+reports the version of the code you built (the `APP_VERSION` variable is ignored), so check it after a deploy: it should match the tag.
 
 `--wait` returns only when both services are healthy. The smoke test then walks through every
 feature: health, a clinic question, a question the documents do not cover, a booking, a

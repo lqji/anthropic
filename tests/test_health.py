@@ -21,10 +21,10 @@ def test_health_ok_with_database(make_settings: Callable[..., Settings], databas
     assert body["version"]
 
 
-def test_health_reports_the_version_of_the_code(
+def test_health_reports_the_version_of_the_code_whatever_APP_VERSION_says(
     make_settings: Callable[..., Settings], database_url: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.delenv("APP_VERSION", raising=False)
+    monkeypatch.setenv("APP_VERSION", "dev")  # a .env copied from an old .env.example
     app = create_app(make_settings(database_url=database_url))
     with TestClient(app) as client:
         body = client.get("/health").json()

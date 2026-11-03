@@ -5,8 +5,6 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from pydantic import Field, SecretStr, ValidationError, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from clinic import __version__
-
 
 class ConfigError(Exception):
     """Raised at startup when the environment is missing or has invalid settings."""
@@ -41,8 +39,6 @@ class Settings(BaseSettings):
     rag_min_score: float = Field(default=0.30, ge=0)
     rag_top_k: int = Field(default=3, ge=1)
     clinic_docs_dir: Path = Path("seed/clinic_docs")
-
-    app_version: str = __version__
 
     @field_validator("openai_api_key", mode="before")
     @classmethod
