@@ -73,8 +73,12 @@ On every start the lifespan runs `sql/*.sql` and `PostgresSaver.setup()` (both i
 uses its own autocommit connection). The graph's saver uses a separate pool with autocommit and
 dict rows, so the app pool keeps one-block-one-transaction semantics. If the database is down at
 start, this is logged as `startup.database_unavailable`, `/health` reports 503, and a background
-thread retries every 5 s until it succeeds (`startup.database_prepared_after_retry`). Any other
-error is logged as `startup.database_prepare_failed` and retrying stops.
+thread retries every 5 s until it succeeds (`startup.database_prepared_after_retry`). Only
+"cannot reach the database" is retried (no SQLSTATE, class 08, or 57P01-57P03). Any other error,
+such as a timed-out migration, stops a first start or is logged as
+`startup.database_prepare_failed` and stops the retry. Setup connections use a 5-minute
+statement timeout (`SETUP_STATEMENT_TIMEOUT_MS`) instead of the 5 s request timeout, so a
+migration on a large checkpoint table is not cancelled.
 
 `finalize` raises `MissingReplyError` if a turn reaches it without a `reply`: a node that forgets
 to answer fails loudly instead of being hidden behind a generic message.

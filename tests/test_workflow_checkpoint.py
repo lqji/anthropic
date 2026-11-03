@@ -14,6 +14,7 @@ from langchain_core.messages import HumanMessage
 from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.postgres import PostgresSaver
 from psycopg.conninfo import conninfo_to_dict, make_conninfo
+from psycopg.rows import TupleRow
 
 from clinic import app as app_module
 from clinic.app import create_app, keep_preparing
@@ -215,6 +216,59 @@ def test_retry_stops_on_an_error_that_will_not_fix_itself(
 
     assert len(calls) == 1
     assert _logged(caplog, "startup.database_prepare_failed")
+
+
+@pytest.mark.parametrize(
+    ("error", "unreachable"),
+    [
+        (psycopg.OperationalError("connection refused"), True),  # no SQLSTATE: never connected
+        (psycopg.errors.ConnectionFailure(), True),  # 08006
+        (psycopg.errors.CannotConnectNow(), True),  # 57P03: server still starting up
+        (psycopg.errors.AdminShutdown(), True),  # 57P01: server restarting
+        (psycopg.errors.QueryCanceled(), False),  # 57014: statement timeout
+    ],
+)
+def test_only_an_unreachable_database_counts_as_unreachable(
+    error: psycopg.OperationalError, unreachable: bool
+) -> None:
+    assert app_module.is_unreachable(error) is unreachable
+
+
+def test_a_timed_out_migration_stops_startup_instead_of_being_retried(
+    settings: Settings, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    def slow_schema(conn: psycopg.Connection[TupleRow]) -> None:
+        conn.execute("SET statement_timeout = 10")
+        conn.execute("SELECT pg_sleep(1)")
+
+    monkeypatch.setattr(app_module, "apply_schema", slow_schema)
+
+    with caplog.at_level(logging.ERROR, logger="clinic.startup"):
+        with pytest.raises(psycopg.errors.QueryCanceled):
+            app_module.prepare_database(settings)
+
+    assert not _logged(caplog, "startup.database_unavailable")
+
+
+def test_setup_connections_use_the_long_statement_timeout(
+    settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    timeouts: dict[str, object] = {}
+
+    def schema_spy(conn: psycopg.Connection[TupleRow]) -> None:
+        row = conn.execute("SHOW statement_timeout").fetchone()
+        timeouts["schema"] = None if row is None else row[0]
+
+    def setup_spy(saver: PostgresSaver) -> None:
+        assert isinstance(saver.conn, psycopg.Connection)
+        row = saver.conn.execute("SHOW statement_timeout").fetchone()
+        timeouts["checkpointer"] = None if row is None else row["statement_timeout"]
+
+    monkeypatch.setattr(app_module, "apply_schema", schema_spy)
+    monkeypatch.setattr(PostgresSaver, "setup", setup_spy)
+
+    assert app_module.prepare_database(settings) is True
+    assert timeouts == {"schema": "5min", "checkpointer": "5min"}  # not the 5 s request timeout
 
 
 def _logged(caplog: pytest.LogCaptureFixture, message: str) -> bool:

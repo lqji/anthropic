@@ -12,6 +12,9 @@ logger = logging.getLogger("clinic.db")
 
 CONNECT_TIMEOUT_S = 5
 STATEMENT_TIMEOUT_MS = 5000
+# One-off schema and checkpoint migrations at startup: CREATE INDEX on a large checkpoint table
+# can take far longer than a request, but must still not hang forever.
+SETUP_STATEMENT_TIMEOUT_MS = 300_000
 
 
 def make_pool(settings: Settings) -> ConnectionPool:

@@ -11,7 +11,12 @@ from clinic import __version__
 from clinic.api import health
 from clinic.clock import SystemClock
 from clinic.config import Settings
-from clinic.db import CONNECT_TIMEOUT_S, make_checkpoint_pool, make_pool
+from clinic.db import (
+    CONNECT_TIMEOUT_S,
+    SETUP_STATEMENT_TIMEOUT_MS,
+    make_checkpoint_pool,
+    make_pool,
+)
 from clinic.deps import Deps
 from clinic.errors import install_error_handlers
 from clinic.llm import make_llm
@@ -25,6 +30,20 @@ logger = logging.getLogger("clinic.startup")
 
 PREPARE_RETRY_S = 5.0
 
+# SQLSTATEs that mean "the server is going away or not ready yet", so trying again can help:
+# admin_shutdown, crash_shutdown, cannot_connect_now (still starting up).
+_RETRYABLE_SQLSTATES = frozenset({"57P01", "57P02", "57P03"})
+
+
+def is_unreachable(exc: psycopg.OperationalError) -> bool:
+    """True if the database could not be reached, False if it answered with an error.
+
+    No SQLSTATE means the connection failed or dropped; class 08 is a connection exception. Any
+    other operational error (e.g. a statement timeout during a migration) will not fix itself.
+    """
+    sqlstate = exc.sqlstate
+    return sqlstate is None or sqlstate.startswith("08") or sqlstate in _RETRYABLE_SQLSTATES
+
 
 def prepare_database(settings: Settings) -> bool:
     """Create the app tables and the checkpoint tables. True when done.
@@ -33,13 +52,25 @@ def prepare_database(settings: Settings) -> bool:
     gives False, so the api still starts and /health can report it; any other error stops startup.
     """
     try:
-        with psycopg.connect(settings.database_url, connect_timeout=CONNECT_TIMEOUT_S) as conn:
+        with psycopg.connect(
+            settings.database_url,
+            connect_timeout=CONNECT_TIMEOUT_S,
+            options=f"-c statement_timeout={SETUP_STATEMENT_TIMEOUT_MS}",
+        ) as conn:
             apply_schema(conn)
         setup_checkpointer(settings.database_url)
     except psycopg.OperationalError as exc:
+        if not is_unreachable(exc):
+            raise
         logger.error(
             "startup.database_unavailable",
-            extra={"fields": {"error": type(exc).__name__, "step": "schema_and_checkpointer"}},
+            extra={
+                "fields": {
+                    "error": type(exc).__name__,
+                    "detail": str(exc).strip(),
+                    "step": "schema_and_checkpointer",
+                }
+            },
         )
         return False
     return True
@@ -48,8 +79,9 @@ def prepare_database(settings: Settings) -> bool:
 def keep_preparing(settings: Settings, stop: threading.Event) -> None:
     """Retry `prepare_database` until it succeeds or the app shuts down.
 
-    Only an unreachable database is retried. Any other error (SQL bug, failed migration) will not
-    fix itself: it is logged with its traceback and retrying stops, as it would stop a first start.
+    Only an unreachable database is retried (see `is_unreachable`). Any other error (SQL bug,
+    timed-out migration) will not fix itself: it is logged with its traceback and retrying stops,
+    as it would stop a first start.
     """
     while not stop.wait(PREPARE_RETRY_S):
         try:
