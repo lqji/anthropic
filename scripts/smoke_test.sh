@@ -107,8 +107,12 @@ say "How should I prepare for my visit?"
 expect_status "clinic question" 200
 expect_field "clinic question" '.outcome' answered
 [ "$(field '.sources | length')" -gt 0 ] 2>/dev/null || fail "clinic question" "the answer names no source"
-case "$(field '.reply')" in *"Source:"*) ;; *) fail "clinic question" "the reply does not end with its source" ;; esac
-pass "clinic question: answered from $(field '.sources[0].document')"
+SOURCE_DOC="$(field '.sources[0].document')"
+case "$(field '.reply')" in
+  *"Source: $SOURCE_DOC") ;;
+  *) fail "clinic question" "the reply does not end with 'Source: $SOURCE_DOC'" ;;
+esac
+pass "clinic question: answered from $SOURCE_DOC"
 
 # 5. Something the documents do not cover is not answered.
 say "Where can I park my car?"

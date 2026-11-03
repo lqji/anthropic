@@ -110,6 +110,9 @@ APP_VERSION=<tag> docker compose up --build -d --wait
 scripts/smoke_test.sh                           # http://localhost:8000, or pass another base URL
 ```
 
+On a live system use `SKIP_EMERGENCY=1 scripts/smoke_test.sh`: the emergency check would leave a
+flag in the staff list that nobody can close.
+
 `--wait` returns only when both services are healthy. The smoke test then walks through every
 feature: health, a clinic question, a question the documents do not cover, a booking, a
 cancellation that waits for staff, and an emergency. It prints one `ok` line per check, stops at
@@ -148,13 +151,22 @@ To go back to an older release whose code does not work with the newer schema, r
 taken before the upgrade (**this discards everything saved since**):
 
 ```bash
+# 1. Check the backup is complete, and keep the current data in case the restore fails.
+test -s backup-<date>.sql && grep -q 'PostgreSQL database dump complete' backup-<date>.sql
+(umask 077; docker compose exec -T db sh -c 'pg_dump -U "$POSTGRES_USER" "$POSTGRES_DB"' > backup-now.sql)
+# 2. Replace the database with the backup.
 docker compose down -v                      # deletes the database volume
 docker compose up -d --wait db              # a new, empty database
 docker compose exec -T db sh -c 'psql -U "$POSTGRES_USER" "$POSTGRES_DB"' < backup-<date>.sql
+# 3. Deploy the old release.
 git checkout <previous-tag>
 APP_VERSION=<previous-tag> docker compose up --build -d --wait
 scripts/smoke_test.sh
 ```
+
+Step 1 stops at the first command that fails (check the output before going on), and
+`backup-now.sql` is what you go back to if the restore does not work. Delete both files when you
+no longer need them.
 
 ### If something is wrong
 
