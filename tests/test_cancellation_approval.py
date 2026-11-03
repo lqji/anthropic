@@ -13,6 +13,7 @@ from fastapi.testclient import TestClient
 
 from clinic.config import Settings
 from clinic.repositories import approvals
+from clinic.schema import apply_schema
 from clinic.workflows.approval import ApprovalState
 from tests.approval_harness import FakeBookings, running_app
 from tests.test_conversation_api import SEED_DIR
@@ -25,6 +26,8 @@ DECISION = {"decided_by": "desk-1", "reason": "Patient called to confirm"}
 @pytest.fixture
 def settings(make_settings: Callable[..., Settings], database_url: str) -> Settings:
     with psycopg.connect(database_url, autocommit=True, connect_timeout=5) as conn:
+        # No app has started yet on a fresh database (CI), so create the tables first.
+        apply_schema(conn)
         conn.execute("TRUNCATE conversations CASCADE")  # cascades to messages and approvals
     return make_settings(database_url=database_url, clinic_docs_dir=SEED_DIR)
 
