@@ -114,7 +114,9 @@ scripts/smoke_test.sh                           # http://localhost:8000, or pass
 feature: health, a clinic question, a question the documents do not cover, a booking, a
 cancellation that waits for staff, and an emergency. It prints one `ok` line per check, stops at
 the first failure with the check name and the response, and exits 1 (it exits 0 only if every check
-passed). Run it after every deploy.
+passed). Run it after every deploy. Its emergency check leaves a flag in the staff list that no
+endpoint can close; the flag text starts with "SMOKE TEST" so staff can tell it apart, and
+`SKIP_EMERGENCY=1 scripts/smoke_test.sh` leaves that check out on a live system.
 
 The database lives in the `pgdata` volume, so a normal deploy keeps all data. **First deploy or a
 clean demo:** `docker compose down -v` deletes the volume, and the demo slots are seeded again for

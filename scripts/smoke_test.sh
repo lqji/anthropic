@@ -7,8 +7,8 @@
 # exits 1. Exits 0 only if every check passed.
 #
 # It uses its own patient_ref, so it never touches real patients. It books a slot on a later day
-# and cancels it again, so the slot is free afterwards; the emergency flag it creates stays in
-# the staff list. The booking steps need a free slot on one of the next 4 days: the demo slots
+# and cancels it again, so the slot is free afterwards. Its emergency check leaves a flag in the
+# staff list (text starting "SMOKE TEST"); set SKIP_EMERGENCY=1 to leave that check out. The booking steps need a free slot on one of the next 4 days: the demo slots
 # are seeded once for 5 days, so on an old database run `docker compose down -v` first.
 set -u -o pipefail
 
@@ -154,15 +154,21 @@ expect_field "approve" '.status' approved
 case "$(field '.patient_message')" in *"cancelled"*) ;; *) fail "approve" "the patient is not told the booking is cancelled" ;; esac
 pass "cancellation: paused for staff, approved, booking cancelled"
 
-# 8. An emergency is answered at once and flagged for staff.
-say "I have crushing chest pain"
-expect_status "emergency" 200
-expect_field "emergency" '.outcome' emergency
-# The list has no paging and is newest first, so the flag raised just now is always in it.
-call GET "/api/v1/emergencies?status=open"
-expect_status "emergency flag" 200
-[ "$(printf '%s' "$BODY" | jq --arg id "$CONVERSATION" '[.[] | select(.conversation_id == $id)] | length')" -ge 1 ] \
-  || fail "emergency flag" "the emergency is not in the staff list"
-pass "emergency: answered at once and flagged for staff"
+# 8. An emergency is answered at once and flagged for staff. The flag stays in the staff list
+# (there is no endpoint to close it); its text starts with "SMOKE TEST" so staff can tell it apart.
+# SKIP_EMERGENCY=1 leaves this check out, for a live system where staff should not see the flag.
+if [ "${SKIP_EMERGENCY:-}" = 1 ]; then
+  echo "skip emergency (SKIP_EMERGENCY=1)"
+else
+  say "SMOKE TEST: I have crushing chest pain"
+  expect_status "emergency" 200
+  expect_field "emergency" '.outcome' emergency
+  # The list has no paging and is newest first, so the flag raised just now is always in it.
+  call GET "/api/v1/emergencies?status=open"
+  expect_status "emergency flag" 200
+  [ "$(printf '%s' "$BODY" | jq --arg id "$CONVERSATION" '[.[] | select(.conversation_id == $id)] | length')" -ge 1 ] \
+    || fail "emergency flag" "the emergency is not in the staff list"
+  pass "emergency: answered at once and flagged for staff"
+fi
 
 echo "Smoke test passed: $CHECKS checks against $BASE_URL"
