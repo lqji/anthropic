@@ -117,13 +117,23 @@ expect_field "not in documents" '.outcome' not_in_documents
 pass "not in documents: the front desk is suggested instead of a guess"
 
 # 6. A slot is offered and booked on a later day, without staff.
-say "Show me free slots with $DOCTOR_NAME on $SLOT_DAY"
-expect_status "offer slots" 200
-expect_field "offer slots" '.outcome' slots_listed
-say "book number 1"
-expect_status "book" 200
+# The demo database is shared, so someone else may take the offered slot between the listing and
+# the booking: then the api answers slot_taken with a fresh list, and we try once more.
+for attempt in 1 2; do
+  say "Show me free slots with $DOCTOR_NAME on $SLOT_DAY"
+  expect_status "offer slots" 200
+  expect_field "offer slots" '.outcome' slots_listed
+  say "book number 1"
+  expect_status "book" 200
+  [ "$(field '.outcome')" = slot_taken ] && [ "$attempt" = 1 ] && continue
+  break
+done
 expect_field "book" '.outcome' booked
-pass "booking: confirmed at once for $SLOT_DAY"
+case "$(field '.reply')" in
+  *"$DOCTOR_NAME"*) ;;
+  *) fail "book" "the confirmation does not name $DOCTOR_NAME" ;;
+esac
+pass "booking: confirmed at once with $DOCTOR_NAME for $SLOT_DAY"
 
 # 7. A cancellation waits for staff, and approving it cancels the booking.
 say "Cancel my appointment"
@@ -147,6 +157,7 @@ pass "cancellation: paused for staff, approved, booking cancelled"
 say "I have crushing chest pain"
 expect_status "emergency" 200
 expect_field "emergency" '.outcome' emergency
+# The list has no paging and is newest first, so the flag raised just now is always in it.
 call GET "/api/v1/emergencies?status=open"
 expect_status "emergency flag" 200
 [ "$(printf '%s' "$BODY" | jq --arg id "$CONVERSATION" '[.[] | select(.conversation_id == $id)] | length')" -ge 1 ] \

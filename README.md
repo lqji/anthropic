@@ -131,10 +131,14 @@ scripts/smoke_test.sh
 ```
 
 Both images stay on the VM (`docker image ls clinic-api`), so building the older tag again is fast
-and nothing comes from a registry. Startup only adds what is missing and drops nothing, so the older
-version starts against the same database. Before a release that changes the database, take a backup
-first:
-`docker compose exec -T db pg_dump -U clinic clinic > backup-$(date +%F).sql`.
+and nothing comes from a registry. Startup only adds what is missing and drops nothing, but a
+newer release may add a column or constraint that the older code does not expect. Roll back like
+this only to a release with the same database schema, and read the release notes first. Before a
+release that changes the database, take a backup:
+
+```bash
+docker compose exec -T db sh -c 'pg_dump -U "$POSTGRES_USER" "$POSTGRES_DB"' > backup-$(date +%F).sql
+```
 
 ### If something is wrong
 
