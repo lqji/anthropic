@@ -12,6 +12,7 @@ from clinic.workflows.graph import build_graph
 from clinic.workflows.history import history_window
 from clinic.workflows.nodes import NODES
 from clinic.workflows.nodes._stub import NOT_IMPLEMENTED, NOT_IMPLEMENTED_REPLY
+from clinic.workflows.nodes.reply import CLARIFY, CLARIFY_REPLY
 from clinic.workflows.nodes.safety import MissingReplyError
 from clinic.workflows.routing import route_intent, route_start
 from clinic.workflows.state import INTENTS, ConversationState, new_turn, turn_id_for
@@ -59,15 +60,30 @@ def test_every_graph_node_is_a_stub_with_the_state_signature(
         assert isinstance(node({**new_turn("hello", "t1"), "reply": "ok"}), dict), name
 
 
-def test_a_turn_runs_end_to_end_with_an_honest_fallback(
+def test_a_turn_runs_end_to_end_and_an_unclear_message_gets_a_question(
     make_settings: Callable[..., Settings],
 ) -> None:
     graph = build_graph(make_settings(), None)
 
     result = graph.invoke(new_turn("hello", "t1"))
 
-    assert result["outcome"] == NOT_IMPLEMENTED
+    assert result["outcome"] == CLARIFY
     assert [type(m) for m in result["messages"]] == [HumanMessage, AIMessage]
+    assert result["messages"][-1].text == CLARIFY_REPLY
+
+
+def test_a_node_without_a_story_yet_gives_an_honest_fallback(
+    make_settings: Callable[..., Settings], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def classify_book(state: ConversationState) -> dict[str, object]:
+        return {"intent": "book", "confidence": 1.0, "entities": {}}
+
+    monkeypatch.setitem(NODES, "classify", classify_book)
+    graph = build_graph(make_settings(), None)
+
+    result = graph.invoke(new_turn("book me in", "t1"))
+
+    assert result["outcome"] == NOT_IMPLEMENTED
     assert result["messages"][-1].text == NOT_IMPLEMENTED_REPLY
 
 
@@ -152,6 +168,22 @@ def test_route_start_declines_medical_advice_on_the_latest_patient_message() -> 
 )
 def test_route_intent_sends_each_intent_to_its_node(intent: str, node: str) -> None:
     assert route_intent({"intent": intent, "confidence": 0.9}, min_confidence=0.6) == node
+
+
+@pytest.mark.parametrize(
+    ("intent", "entities", "node"),
+    [
+        ("book", {"unknown_doctor": "Dr. Zaid"}, "clarify"),
+        ("find_slots", {"unknown_specialty": "Cardiology"}, "clarify"),
+        ("find_slots", {"doctor": "Dr. Salma Nasser"}, "find_slots"),
+        ("cancel", {"unknown_doctor": "Dr. Zaid"}, "cancel"),  # only booking intents ask
+    ],
+)
+def test_route_intent_asks_which_doctor_when_one_is_not_in_the_catalogue(
+    intent: str, entities: dict[str, str], node: str
+) -> None:
+    state: ConversationState = {"intent": intent, "confidence": 1.0, "entities": entities}
+    assert route_intent(state, min_confidence=0.6) == node
 
 
 def test_every_known_intent_has_a_route() -> None:

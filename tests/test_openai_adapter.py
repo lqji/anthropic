@@ -13,10 +13,26 @@ from openai.types.chat import ChatCompletion
 from clinic.app import create_app
 from clinic.config import Settings
 from clinic.errors import LLMUnavailable
-from clinic.llm import AnswerResult, ClassifyResult, OpenAILLM, Passage
+from clinic.llm import (
+    AnswerResult,
+    ClassifyContext,
+    ClassifyResult,
+    HistoryMessage,
+    OpenAILLM,
+    Passage,
+)
 from clinic.llm import openai_adapter as adapter
 
 MONDAY = date(2026, 11, 2)
+CONTEXT = ClassifyContext(
+    today=MONDAY,
+    history=(
+        HistoryMessage(role="patient", text="Is Dr. Salma in?"),
+        HistoryMessage(role="assistant", text="Which day?"),
+    ),
+    doctors=("Dr. Salma Nasser", "Dr. Khalid Rahman"),
+    specialties=("Dermatology", "General Practice"),
+)
 PASSAGES = [Passage(source="opening-hours.md", text="The clinic opens at 8 am.")]
 _REQUEST = httpx2.Request("POST", "https://api.openai.test/v1/chat/completions")
 
@@ -70,7 +86,7 @@ def test_provider_failures_become_llm_unavailable_and_are_logged(
 ) -> None:
     llm = _llm(openai_settings, StubClient(error=error))
     with caplog.at_level(logging.INFO, logger="clinic.llm"), pytest.raises(LLMUnavailable):
-        llm.classify("hello", MONDAY)
+        llm.classify("hello", CONTEXT)
     records = [r for r in caplog.records if r.name == "clinic.llm"]
     assert len(records) == 1
     assert records[0].getMessage() == "llm.call"
@@ -87,7 +103,7 @@ def test_answer_provider_failure_also_raises(openai_settings: Settings) -> None:
 def test_content_filter_means_unclear_and_not_found(openai_settings: Settings) -> None:
     error = openai.ContentFilterFinishReasonError()
     llm = _llm(openai_settings, StubClient(error=error))
-    assert llm.classify("hello", MONDAY) == ClassifyResult(intent="unclear", confidence=0.0)
+    assert llm.classify("hello", CONTEXT) == ClassifyResult(intent="unclear", confidence=0.0)
     assert llm.answer("When do you open?", PASSAGES) == AnswerResult(found=False)
 
 
@@ -97,7 +113,7 @@ def test_llm_unavailable_maps_to_503_json(openai_settings: Settings) -> None:
 
     @app.get("/boom")
     def boom() -> None:
-        llm.classify("hello", MONDAY)
+        llm.classify("hello", CONTEXT)
 
     with TestClient(app) as client:
         response = client.get("/boom")
@@ -107,28 +123,55 @@ def test_llm_unavailable_maps_to_503_json(openai_settings: Settings) -> None:
 
 def test_classify_maps_the_parsed_output(openai_settings: Settings) -> None:
     parsed = adapter._ClassifyOut(
-        intent="find_slots", doctor="Dr. Salma", date="2026-11-05", confidence=0.9
+        intent="find_slots",
+        doctor="Dr. Salma",
+        specialty=None,
+        date="2026-11-05",
+        confidence=0.9,
     )
     client = StubClient(parsed=parsed)
-    result = _llm(openai_settings, client).classify("Salma Thursday?", MONDAY)
+    result = _llm(openai_settings, client).classify("Salma Thursday?", CONTEXT)
     assert result == ClassifyResult(
         intent="find_slots", doctor="Dr. Salma", date="2026-11-05", confidence=0.9
     )
     assert client.calls[0]["model"] == openai_settings.openai_model
-    assert "2026-11-02" in client.calls[0]["messages"][0]["content"]
-    assert client.calls[0]["messages"][1] == {"role": "user", "content": "Salma Thursday?"}
+    assert client.calls[0]["messages"][-1] == {"role": "user", "content": "Salma Thursday?"}
+    assert result.specialty is None
+
+
+def test_classify_prompt_carries_today_the_catalogue_and_the_history(
+    openai_settings: Settings,
+) -> None:
+    parsed = adapter._ClassifyOut(
+        intent="other", doctor=None, specialty=None, date=None, confidence=1.0
+    )
+    client = StubClient(parsed=parsed)
+    _llm(openai_settings, client).classify("hello", CONTEXT)
+    messages = client.calls[0]["messages"]
+    system = messages[0]["content"]
+    assert messages[0]["role"] == "system"
+    assert "2026-11-02 (Monday)" in system
+    assert "Dr. Salma Nasser, Dr. Khalid Rahman" in system
+    assert "Dermatology, General Practice" in system
+    assert [(m["role"], m["content"]) for m in messages[1:]] == [
+        ("user", "Is Dr. Salma in?"),
+        ("assistant", "Which day?"),
+        ("user", "hello"),
+    ]
 
 
 def test_classify_drops_an_invalid_date_and_clamps_confidence(openai_settings: Settings) -> None:
-    parsed = adapter._ClassifyOut(intent="book", doctor="", date="next week", confidence=7)
-    result = _llm(openai_settings, StubClient(parsed=parsed)).classify("book", MONDAY)
+    parsed = adapter._ClassifyOut(
+        intent="book", doctor="", specialty="", date="next week", confidence=7
+    )
+    result = _llm(openai_settings, StubClient(parsed=parsed)).classify("book", CONTEXT)
     assert result.date is None
     assert result.doctor is None
     assert result.confidence == 1.0
 
 
 def test_classify_without_parsed_output_is_unclear(openai_settings: Settings) -> None:
-    result = _llm(openai_settings, StubClient(parsed=None)).classify("hello", MONDAY)
+    result = _llm(openai_settings, StubClient(parsed=None)).classify("hello", CONTEXT)
     assert result.intent == "unclear"
 
 

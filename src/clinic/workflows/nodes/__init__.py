@@ -11,7 +11,7 @@ from clinic.workflows.nodes.approvals import (
     cancel,
     request_approval,
 )
-from clinic.workflows.nodes.classify import classify
+from clinic.workflows.nodes.classify import classify, make_classify
 from clinic.workflows.nodes.knowledge import knowledge
 from clinic.workflows.nodes.reply import clarify, other
 from clinic.workflows.nodes.safety import decline, finalize
@@ -35,4 +35,4 @@ NODES: Final[dict[str, Node]] = {
 
 def wired_nodes(deps: WorkflowDeps) -> dict[str, Node]:
     """Real nodes built with their dependencies; they replace the stubs of the same name."""
-    return {"find_slots": make_find_slots(deps)}
+    return {"classify": make_classify(deps), "find_slots": make_find_slots(deps)}

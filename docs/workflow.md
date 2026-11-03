@@ -26,8 +26,8 @@ flowchart LR
 
 | Node | File | Filled in by |
 |---|---|---|
-| `classify` | `nodes/classify.py` | CFD-07 |
-| `clarify`, `other` | `nodes/reply.py` | CFD-07 |
+| `classify` | `nodes/classify.py` | CFD-07 (done) |
+| `clarify`, `other` | `nodes/reply.py` | CFD-07 (done) |
 | `knowledge` | `nodes/knowledge.py` | CFD-11 |
 | `find_slots` | `nodes/appointments.py` | CFD-12 |
 | `book`, `confirm_booking` | `nodes/appointments.py` | CFD-13 (same-day branch: CFD-15) |
@@ -47,6 +47,8 @@ is its stub (routing-only tests). Until its story lands, a node is a stub that r
   message, else `classify`. The check is passed in; until CFD-09 it never matches.
 - `route_intent`: `clinic_question` → `knowledge`, `find_slots`, `book`, `cancel`, `other`.
   `unclear`, an unknown intent, or confidence below `INTENT_MIN_CONFIDENCE` → `clarify`.
+  `find_slots` and `book` that name a doctor or specialty missing from the catalogue also →
+  `clarify`.
 
 ## State (`state.py`)
 
@@ -84,6 +86,28 @@ pending, and the retry would no longer replace it.
 `new_turn` resets the per-turn fields so nothing leaks from the previous turn. It deliberately
 keeps `offered_slots` (for "book the first one"), `status` and `approval_id`. The approval flow
 (CFD-14) owns the last two and must set and clear them explicitly when a decision is applied.
+
+## `classify`, `clarify`, `other` (CFD-07)
+
+`classify` (built by `make_classify(deps)`) calls `LLMPort.classify(text, context)`. The context
+holds today's date at the clinic, the earlier messages (at most `HISTORY_WINDOW` including the
+latest, starting with a patient message) and the catalogue (doctor and specialty names, read from
+the database each turn). It sets `intent`, `confidence` and `entities`:
+
+| Entity | Meaning |
+|---|---|
+| `doctor`, `specialty` | The exact catalogue name. The model's answer is matched in code (`domain/catalogue.py`: case, "Dr." and a unique surname or first name are accepted), so later nodes never see a guessed name |
+| `date` | `YYYY-MM-DD`, only if the model's value is a valid date |
+| `unknown_doctor`, `unknown_specialty` | What the model returned when it is not in the catalogue (cut to 80 characters). The router sends `find_slots` and `book` to `clarify` |
+| `valid_choices` | Set with an unknown name: the valid doctors and specialties for `clarify` to list |
+
+A model outage raises `LLMUnavailable` (API 503) before the turn writes anything.
+
+`clarify` asks one fixed question (`outcome: "clarify"`). With an unknown doctor or specialty it
+lists the valid names instead, and never repeats what the patient typed. `other` replies with a
+fixed capabilities message (`outcome: "other"`). Neither reply is written by the model, and neither
+writes to the database. `seed/sample_messages.json` holds sample patient messages with the intent
+and node each must reach; a test runs them through the graph.
 
 ## `find_slots` (CFD-12)
 
