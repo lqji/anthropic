@@ -100,6 +100,43 @@ def test_database_back_after_failed_start_is_prepared_by_retry(
     assert loaded == (4,)
 
 
+def test_retry_that_hits_another_error_logs_it_and_stops(
+    make_settings: Callable[..., Settings],
+    database_url: str,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    calls = 0
+
+    def down_then_broken(conn: Connection[TupleRow]) -> None:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise psycopg.OperationalError("database is starting up")
+        raise ValueError("broken schema file")
+
+    monkeypatch.setattr(app_module, "apply_schema", down_then_broken)
+    monkeypatch.setattr(app_module, "PREPARE_RETRY_S", 0.05)
+    settings = make_settings(database_url=database_url, clinic_docs_dir=SEED_DIR)
+
+    with caplog.at_level(logging.ERROR, logger="clinic.startup"):
+        with TestClient(create_app(settings)):
+            deadline = time.monotonic() + 10
+            while time.monotonic() < deadline and not _failed(caplog):
+                time.sleep(0.05)
+            time.sleep(0.2)  # a stopped retry makes no further calls
+
+    failed = _failed(caplog)
+    assert len(failed) == 1
+    assert failed[0].exc_info is not None
+    assert "broken schema file" in str(failed[0].exc_info[1])
+    assert calls == 2
+
+
+def _failed(caplog: pytest.LogCaptureFixture) -> list[logging.LogRecord]:
+    return [r for r in caplog.records if r.getMessage() == "startup.database_prepare_failed"]
+
+
 def test_missing_documents_directory_stops_startup(
     make_settings: Callable[..., Settings], database_url: str, tmp_path: Path
 ) -> None:
