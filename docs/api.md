@@ -21,8 +21,9 @@ Start a conversation.
 Send a patient message and get the assistant's reply.
 
 - Body: `{"text": "hello"}`. `text` is 1 to 2000 characters after trimming.
-- `200`: `{"reply": "...", "intent": "...", "outcome": "...", "status": "active"}`
+- `200`: `{"reply": "...", "intent": "...", "outcome": "...", "status": "active", "sources": []}`
 - `404 not_found`: unknown id (including an id that is not a UUID).
+- `503 llm_unavailable`: the language model failed or timed out.
 - `409 conversation_busy`: another message to the same conversation is still being handled.
 - `422 validation_error`: `text` is empty, blank, or over 2000 characters.
 - `503 workflow_unavailable`: the workflow returned a status the conversation cannot have.
@@ -30,6 +31,11 @@ Send a patient message and get the assistant's reply.
 
 `status` is the conversation status after the turn: `active`, `awaiting_approval` (CFD-14) or
 `closed`.
+
+`sources` (CFD-11) lists the clinic document sections a clinic question was answered from, as
+`[{"document": "visit-preparation.md", "heading": "Blood tests"}]`, and the reply ends with
+`Source: <document>`. It is `[]` for every other reply, including `outcome: "not_in_documents"`
+(the question is not covered by the clinic's documents).
 
 ### `GET /api/v1/conversations/{id}`
 Read a conversation back, with all its messages oldest first.

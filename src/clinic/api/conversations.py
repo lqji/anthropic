@@ -46,11 +46,17 @@ class ConversationDetail(ConversationOut):
     messages: list[MessageOut]
 
 
+class SourceOut(BaseModel):
+    document: str
+    heading: str
+
+
 class TurnOut(BaseModel):
     reply: str
     intent: str
     outcome: str
     status: str
+    sources: list[SourceOut]  # clinic document sections the reply came from; [] otherwise
 
 
 def get_service(deps: Annotated[Deps, Depends(get_deps)]) -> ConversationService:
@@ -72,7 +78,11 @@ def start_conversation(body: StartConversation, service: Service) -> Conversatio
 def send_message(conversation_id: str, body: SendMessage, service: Service) -> TurnOut:
     result = service.handle_message(conversation_id, body.text)
     return TurnOut(
-        reply=result.reply, intent=result.intent, outcome=result.outcome, status=result.status
+        reply=result.reply,
+        intent=result.intent,
+        outcome=result.outcome,
+        status=result.status,
+        sources=[SourceOut(document=s.document, heading=s.heading) for s in result.sources],
     )
 
 
