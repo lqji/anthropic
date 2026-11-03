@@ -1,3 +1,4 @@
+from pathlib import Path
 from typing import Literal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -39,6 +40,7 @@ class Settings(BaseSettings):
     intent_min_confidence: float = Field(default=0.6, ge=0, le=1)
     rag_min_score: float = Field(default=0.30, ge=0)
     rag_top_k: int = Field(default=3, ge=1)
+    clinic_docs_dir: Path = Path("seed/clinic_docs")
 
     app_version: str = __version__
 
