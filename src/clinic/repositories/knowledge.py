@@ -12,6 +12,14 @@ def get_document_sha(conn: Connection[TupleRow], name: str) -> str | None:
     return None if row is None else str(row[0])
 
 
+def delete_documents_except(conn: Connection[TupleRow], keep: Sequence[str]) -> list[str]:
+    """Delete every document (and, by cascade, its chunks) not named in `keep`; return the names."""
+    rows = conn.execute(
+        "DELETE FROM documents WHERE name <> ALL(%s) RETURNING name", (list(keep),)
+    ).fetchall()
+    return sorted(str(row[0]) for row in rows)
+
+
 def replace_document(
     conn: Connection[TupleRow],
     name: str,

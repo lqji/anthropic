@@ -179,6 +179,42 @@ def test_bad_file_is_logged_and_skipped_others_still_load(
     assert knowledge.get_document_sha(conn, "broken.md") is None
 
 
+def test_deleted_file_is_removed_from_db(conn: Connection[TupleRow], docs_dir: Path) -> None:
+    KnowledgeLoader(docs_dir).load(conn)
+    (docs_dir / "insurance.md").unlink()
+
+    report = KnowledgeLoader(docs_dir).load(conn)
+
+    assert report.removed == ["insurance.md"]
+    assert knowledge.get_document_sha(conn, "insurance.md") is None
+    assert _chunks_of(conn, "insurance.md") == []
+
+
+def test_file_that_becomes_bad_loses_its_old_chunks(
+    conn: Connection[TupleRow], docs_dir: Path
+) -> None:
+    KnowledgeLoader(docs_dir).load(conn)
+    (docs_dir / "insurance.md").write_bytes(b"")
+
+    report = KnowledgeLoader(docs_dir).load(conn)
+
+    assert report.skipped == ["insurance.md"]
+    assert report.removed == ["insurance.md"]
+    assert _chunks_of(conn, "insurance.md") == []
+    assert report.unchanged == [n for n in SEED_NAMES if n != "insurance.md"]
+
+
+def test_chunking_rule_change_rechunks_unchanged_files(
+    conn: Connection[TupleRow], docs_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    KnowledgeLoader(docs_dir).load(conn)
+    monkeypatch.setattr("clinic.rag.loader.CHUNKING_VERSION", 2)
+
+    report = KnowledgeLoader(docs_dir).load(conn)
+
+    assert report.loaded == SEED_NAMES
+
+
 def test_utf8_bom_is_accepted(conn: Connection[TupleRow], tmp_path: Path) -> None:
     (tmp_path / "bom.md").write_bytes("﻿# Hours\n\nOpen daily.\n".encode())
 
