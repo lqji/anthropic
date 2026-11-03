@@ -214,3 +214,45 @@ def cancel(conn: Connection[TupleRow], booking_id: int, now: datetime) -> bool:
             return False
         conn.execute("UPDATE slots SET status = 'free' WHERE id = %s", (row[0],))
         return True
+
+
+def confirm_held(conn: Connection[TupleRow], booking_id: int, now: datetime) -> bool:
+    """Staff approved a held same-day booking: booking `confirmed`, slot `booked`. True if changed.
+
+    Safe to repeat: only a `pending_approval` booking changes, and the slot is booked only when
+    this call changed the booking.
+    """
+    with conn.transaction():
+        row = conn.execute(
+            """
+            UPDATE bookings SET status = 'confirmed', updated_at = %(now)s
+            WHERE id = %(id)s AND status = 'pending_approval'
+            RETURNING slot_id
+            """,
+            {"id": booking_id, "now": now},
+        ).fetchone()
+        if row is None:
+            return False
+        conn.execute("UPDATE slots SET status = 'booked' WHERE id = %s", (row[0],))
+        return True
+
+
+def reject_held(conn: Connection[TupleRow], booking_id: int, now: datetime) -> bool:
+    """Staff rejected a held same-day booking: booking `rejected`, slot `free`. True if changed.
+
+    Safe to repeat: the slot is freed only when this call changed the booking, so a replayed
+    decision never frees a slot that someone else has booked since.
+    """
+    with conn.transaction():
+        row = conn.execute(
+            """
+            UPDATE bookings SET status = 'rejected', updated_at = %(now)s
+            WHERE id = %(id)s AND status = 'pending_approval'
+            RETURNING slot_id
+            """,
+            {"id": booking_id, "now": now},
+        ).fetchone()
+        if row is None:
+            return False
+        conn.execute("UPDATE slots SET status = 'free' WHERE id = %s", (row[0],))
+        return True

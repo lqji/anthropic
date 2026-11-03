@@ -119,6 +119,12 @@ class FakeBookings:
     def status(self, booking_id: int) -> str:
         return self.bookings[booking_id].status
 
+    def confirm_held(self, booking_id: int) -> None:
+        self.bookings[booking_id].status = "confirmed"
+
+    def reject_held(self, booking_id: int) -> None:
+        self.bookings[booking_id].status = "rejected"
+
 
 class ProcessDied(RuntimeError):
     """Stands for the process being killed at an awkward moment."""

@@ -11,10 +11,12 @@ from clinic.domain.guard import asks_for_medical_advice
 from clinic.workflows.deps import WorkflowDeps
 from clinic.workflows.nodes import NODES, wired_nodes
 from clinic.workflows.routing import (
+    BOOK_ROUTES,
     CANCEL_ROUTES,
     INTENT_ROUTES,
     REQUEST_ROUTES,
     START_ROUTES,
+    route_after_book,
     route_after_cancel,
     route_after_request,
     route_intent,
@@ -31,7 +33,6 @@ _EDGES: tuple[tuple[str, str], ...] = (
     ("decline", "finalize"),
     ("knowledge", "finalize"),
     ("find_slots", "finalize"),
-    ("book", "confirm_booking"),
     ("confirm_booking", "finalize"),
     ("await_approval", "apply_decision"),
     ("apply_decision", "finalize"),
@@ -66,6 +67,7 @@ def build_graph(
         partial(route_intent, min_confidence=settings.intent_min_confidence),
         list(INTENT_ROUTES),
     )
+    builder.add_conditional_edges("book", route_after_book, list(BOOK_ROUTES))
     builder.add_conditional_edges("cancel", route_after_cancel, list(CANCEL_ROUTES))
     builder.add_conditional_edges("request_approval", route_after_request, list(REQUEST_ROUTES))
     for source, target in _EDGES:

@@ -30,7 +30,7 @@ flowchart LR
 | `clarify`, `other` | `nodes/reply.py` | CFD-07 (done) |
 | `knowledge` | `nodes/knowledge.py` | CFD-11 |
 | `find_slots` | `nodes/appointments.py` | CFD-12 |
-| `book`, `confirm_booking` | `nodes/appointments.py` | CFD-13 (same-day branch: CFD-15) |
+| `book`, `confirm_booking` | `nodes/appointments.py` | CFD-13 (same-day branch: CFD-15, done) |
 | `cancel`, `request_approval`, `await_approval`, `apply_decision` | `nodes/approvals.py` (logic in `workflows/approval.py`, bookings in `workflows/bookings.py`) | CFD-14 (done) |
 | `decline`, `finalize` | `nodes/safety.py` | CFD-09 |
 
@@ -152,7 +152,7 @@ guesses:
 | Situation | Reply |
 |---|---|
 | A valid pick of a later-day slot | `bookings.book_slot`, then `confirm_booking`: "You're booked with Dr. X on Tuesday 3 November at 09:00." (`outcome: "booked"`) |
-| A valid pick of a same-day slot | Same-day bookings need front-desk approval; nothing is booked (`outcome: "same_day_needs_approval"`) until CFD-15 |
+| A valid pick of a same-day slot | The slot is held (`bookings.hold_same_day`), then `request_approval` pauses the conversation for staff: "Same-day appointments need approval from our front desk. I'm holding your appointment today at 12:30 ..." (`outcome: "awaiting_approval"`, `status: "awaiting_approval"`, `approval_id`). Approve: booking `confirmed`, slot `booked`. Reject: booking `rejected`, slot `free`, the patient is told the reason |
 | The slot was taken meanwhile | It says so and lists free slots of that doctor and day (`outcome: "slot_taken"`, new `offered_slots`) |
 | No valid pick, but a doctor or specialty named | The slots, as `find_slots` lists them |
 | No valid pick after an offer | "Which slot would you like?" (`outcome: "clarify"`); the offer stays |
@@ -165,12 +165,19 @@ both win: PostgreSQL locks the row, and the second finds it no longer `free`. Th
 index `bookings_one_active_per_slot` is a second guard; its violation is mapped to
 `SlotUnavailable` by name.
 
-`bookings.hold_same_day` is the same-day counterpart, for CFD-15 to call (`book` does not use it
-yet). In one statement it changes a `free`, not yet started slot to `held`, inserts a
+`bookings.hold_same_day` is the same-day counterpart, called by `book` when
+`domain/policies.requires_approval` is true (the slot starts on the same clinic calendar day as now;
+UTC does not decide). In one statement it changes a `free`, not yet started slot to `held`, inserts a
 `pending_approval` booking on it and a `pending` `same_day_booking` approval for that booking:
 all three or nothing. Same guards and the same `SlotUnavailable`. A replayed turn gets the
 conversation's existing hold back. Any other unique violation, such as the conversation already
 waiting for another approval, is raised as it is.
+
+`request_approval` finds the approval that `hold_same_day` created (same conversation, kind and
+booking) and reuses it, so staff are asked once. `apply_decision` then calls
+`bookings.confirm_held` or `bookings.reject_held`: a conditional `UPDATE` of a `pending_approval`
+booking, freeing the slot only if that call changed the booking, so a replayed decision cannot free
+a slot someone else has booked since.
 
 **Replay safety.** `book` leaves `offered_slots` as they are after booking. A replayed turn picks
 the same slot, and `book_slot` returns the conversation's existing `confirmed` booking for it

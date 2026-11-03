@@ -41,6 +41,22 @@ class PostgresBookings:
                 "booking.cancel_not_applied", extra={"fields": {"booking_id": booking_id}}
             )
 
+    def confirm_held(self, booking_id: int) -> None:
+        with self._pool.connection() as conn:
+            changed = bookings.confirm_held(conn, booking_id, self._clock.now())
+        if not changed:
+            logger.warning(
+                "booking.confirm_not_applied", extra={"fields": {"booking_id": booking_id}}
+            )
+
+    def reject_held(self, booking_id: int) -> None:
+        with self._pool.connection() as conn:
+            changed = bookings.reject_held(conn, booking_id, self._clock.now())
+        if not changed:
+            logger.warning(
+                "booking.reject_not_applied", extra={"fields": {"booking_id": booking_id}}
+            )
+
     def _label(self, booking: ConfirmedBooking) -> str:
         local = booking.starts_at.astimezone(ZoneInfo(self._timezone))
         return f"on {local:%a} {local.day} {local:%b} at {local:%H:%M} with {booking.doctor}"

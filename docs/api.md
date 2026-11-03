@@ -70,7 +70,7 @@ Emergency flags for front-desk staff, newest first.
 
 ## Approvals (CFD-14)
 
-A cancellation (and, from CFD-15, a same-day booking) waits for front-desk staff. The message
+A cancellation and a same-day booking (CFD-15) wait for front-desk staff. The message
 that asks for it gets `status: "awaiting_approval"` and an `approval_id`. The conversation is then
 paused: every non-emergency message gets a "still waiting" reply (`outcome: "still_waiting"`)
 until staff decide, while emergencies are still answered. The pause survives a restart. If the

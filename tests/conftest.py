@@ -1,8 +1,10 @@
+from __future__ import annotations
+
 import os
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
 import psycopg
@@ -12,6 +14,9 @@ from psycopg.conninfo import make_conninfo
 from clinic.clock import FixedClock
 from clinic.config import Settings
 from clinic.llm import FakeLLM
+
+if TYPE_CHECKING:
+    from tests.chat_harness import Chat
 
 UNREACHABLE_DB_URL = "postgresql://nobody:nothing@127.0.0.1:1/none"
 
@@ -62,3 +67,23 @@ def temporary_database(database_url: str) -> Iterator[str]:
             admin.execute(
                 psycopg.sql.SQL("DROP DATABASE IF EXISTS {} WITH (FORCE)").format(identifier)
             )
+
+
+@pytest.fixture
+def url(database_url: str) -> Iterator[str]:
+    """A brand-new, seeded database (tables, catalogue, slots at the fixed test time)."""
+    from clinic.app import prepare_database
+    from tests.chat_harness import NOW
+
+    with temporary_database(database_url) as temp_url:
+        settings = Settings(llm_provider="fake", database_url=temp_url)
+        assert prepare_database(settings, FixedClock(NOW))
+        yield temp_url
+
+
+@pytest.fixture
+def chat(url: str) -> Iterator[Chat]:
+    from tests.chat_harness import running
+
+    with running(url) as instance:
+        yield instance

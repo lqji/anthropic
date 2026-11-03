@@ -282,3 +282,70 @@ def test_the_constraint_guard_looks_at_the_approvals_table_only(env: Env) -> Non
             " AND conrelid = 'approvals'::regclass"
         ).fetchone()
     assert exists is not None
+
+
+# --- Staff decisions on a held same-day booking (CFD-15) ---------------------------------------
+
+
+def _hold(env: Env) -> tuple[int, int]:
+    """A same-day style hold: booking `pending_approval`, slot `held`. (booking id, slot id)."""
+    return env.book(TOMORROW, status="pending_approval")
+
+
+def test_confirming_a_held_booking_books_the_slot(env: Env) -> None:
+    booking_id, slot_id = _hold(env)
+
+    env.bookings.confirm_held(booking_id)
+
+    assert env.booking_status(booking_id) == "confirmed"
+    assert env.slot_status(slot_id) == "booked"
+
+
+def test_rejecting_a_held_booking_frees_the_slot(env: Env) -> None:
+    booking_id, slot_id = _hold(env)
+
+    env.bookings.reject_held(booking_id)
+
+    assert env.booking_status(booking_id) == "rejected"
+    assert env.slot_status(slot_id) == "free"
+
+
+@pytest.mark.parametrize("decide", ["confirm_held", "reject_held"])
+def test_a_decision_applied_twice_changes_nothing_the_second_time(env: Env, decide: str) -> None:
+    booking_id, slot_id = _hold(env)
+    getattr(env.bookings, decide)(booking_id)
+    first = (env.booking_status(booking_id), env.slot_status(slot_id))
+
+    getattr(env.bookings, decide)(booking_id)
+
+    assert (env.booking_status(booking_id), env.slot_status(slot_id)) == first
+
+
+def test_a_replayed_reject_never_frees_a_slot_someone_else_has_since_booked(env: Env) -> None:
+    booking_id, slot_id = _hold(env)
+    env.bookings.reject_held(booking_id)
+    with psycopg.connect(env.url, autocommit=True) as conn:  # another patient takes the slot
+        other = uuid4()
+        conn.execute(
+            "INSERT INTO conversations (id, patient_ref, created_at) VALUES (%s, 'p2', %s)",
+            (other, NOW),
+        )
+        conn.execute(
+            "INSERT INTO bookings (slot_id, conversation_id, status, created_at, updated_at)"
+            " VALUES (%s, %s, 'confirmed', %s, %s)",
+            (slot_id, other, NOW, NOW),
+        )
+        conn.execute("UPDATE slots SET status = 'booked' WHERE id = %s", (slot_id,))
+
+    env.bookings.reject_held(booking_id)
+
+    assert env.slot_status(slot_id) == "booked"
+
+
+def test_a_confirmed_booking_is_not_changed_by_a_decision_meant_for_a_held_one(env: Env) -> None:
+    booking_id, slot_id = env.book(TOMORROW)  # already confirmed
+
+    env.bookings.reject_held(booking_id)
+
+    assert env.booking_status(booking_id) == "confirmed"
+    assert env.slot_status(slot_id) == "booked"
