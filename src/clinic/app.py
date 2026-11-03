@@ -9,7 +9,7 @@ from fastapi import FastAPI
 from psycopg_pool import ConnectionPool
 
 from clinic import __version__
-from clinic.api import conversations, health
+from clinic.api import conversations, emergencies, health
 from clinic.clock import SystemClock
 from clinic.config import Settings
 from clinic.db import make_pool
@@ -103,4 +103,5 @@ def create_app(settings: Settings, workflow: ConversationWorkflow | None = None)
     install_error_handlers(app)
     app.include_router(health.router)
     app.include_router(conversations.router)
+    app.include_router(emergencies.router)
     return app

@@ -8,6 +8,7 @@ from pydantic import BaseModel, StringConstraints
 from clinic.api.deps import get_deps
 from clinic.deps import Deps
 from clinic.services.conversation import ConversationService
+from clinic.services.emergency import EmergencyService
 
 router = APIRouter(prefix="/api/v1/conversations", tags=["conversations"])
 
@@ -54,7 +55,8 @@ class TurnOut(BaseModel):
 
 
 def get_service(deps: Annotated[Deps, Depends(get_deps)]) -> ConversationService:
-    return ConversationService(deps.pool, deps.clock, deps.locks, deps.workflow)
+    emergency = EmergencyService(deps.pool, deps.clock, deps.settings.emergency_number)
+    return ConversationService(deps.pool, deps.clock, deps.locks, deps.workflow, emergency)
 
 
 Service = Annotated[ConversationService, Depends(get_service)]

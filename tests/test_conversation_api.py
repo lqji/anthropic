@@ -12,7 +12,7 @@ from fastapi.testclient import TestClient
 from clinic.app import create_app
 from clinic.config import Settings
 from clinic.errors import LLMUnavailable
-from clinic.services.conversation import TurnResult
+from clinic.services.turn import TurnResult
 
 SEED_DIR = Path(__file__).resolve().parents[1] / "seed" / "clinic_docs"
 

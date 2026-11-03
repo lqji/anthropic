@@ -1,7 +1,6 @@
 """Start conversations, handle patient messages, and read a conversation back."""
 
 import logging
-from dataclasses import dataclass
 from typing import Protocol
 from uuid import UUID, uuid4
 
@@ -13,19 +12,13 @@ from clinic.locks import ConversationLocks
 from clinic.repositories import conversations, messages
 from clinic.repositories.conversations import ConversationRow
 from clinic.repositories.messages import MessageRow
+from clinic.services.emergency import EmergencyService
+from clinic.services.turn import TurnResult
 
 logger = logging.getLogger("clinic.conversation")
 
 # Must match the CHECK constraint on conversations.status (sql/01_conversations.sql).
 CONVERSATION_STATUSES = frozenset({"active", "awaiting_approval", "closed"})
-
-
-@dataclass(frozen=True)
-class TurnResult:
-    reply: str
-    intent: str
-    outcome: str
-    status: str
 
 
 class ConversationWorkflow(Protocol):
@@ -48,11 +41,13 @@ class ConversationService:
         clock: Clock,
         locks: ConversationLocks,
         workflow: ConversationWorkflow,
+        emergency: EmergencyService,
     ) -> None:
         self._pool = pool
         self._clock = clock
         self._locks = locks
         self._workflow = workflow
+        self._emergency = emergency
 
     def start(self, patient_ref: str) -> ConversationRow:
         with self._pool.connection() as conn:
@@ -67,7 +62,11 @@ class ConversationService:
             return conversation, messages.list_for(conn, cid)
 
     def handle_message(self, conversation_id: str, text: str) -> TurnResult:
-        """404 if unknown, 409 if another message is in progress, else run the turn and store it.
+        """404 if unknown; an emergency is answered at once; 409 if another message is in
+        progress; else run the turn and store it.
+
+        The emergency check comes before the lock and the workflow, so an emergency is answered
+        even while another turn holds the lock or the LLM is down.
 
         No database connection is held while the workflow runs (it may call the LLM), so slow
         turns cannot exhaust the pool. The patient message and the reply are stored together,
@@ -75,8 +74,13 @@ class ConversationService:
         """
         cid = _parse_id(conversation_id)
         with self._pool.connection() as conn:
-            if conversations.get(conn, cid) is None:
-                raise NotFound("conversation not found")
+            conversation = conversations.get(conn, cid)
+        if conversation is None:
+            raise NotFound("conversation not found")
+
+        emergency = self._emergency.check(cid, text, conversation.status)
+        if emergency is not None:
+            return emergency
 
         with self._locks.hold(str(cid)):
             result = self._paused_reply(cid) or self._workflow.run_turn(str(cid), text)

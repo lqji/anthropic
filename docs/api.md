@@ -25,6 +25,13 @@ Send a patient message and get the assistant's reply.
 `status` is the conversation status after the turn: `active`, `awaiting_approval` (CFD-14) or
 `closed`.
 
+**Emergencies (CFD-08).** If the message matches a deterministic emergency rule
+(`domain/safety.py`), the reply is returned at once with `intent` and `outcome` both
+`"emergency"`, and the text tells the patient to call `EMERGENCY_NUMBER`. This happens before the
+conversation lock and without the workflow or the LLM, so it works even while another message is
+being handled (no 409) or the LLM is down (no 503). The conversation status is unchanged, and the
+message is flagged for staff (see below).
+
 ### `GET /api/v1/conversations/{id}`
 Read a conversation back, with all its messages oldest first.
 
@@ -32,3 +39,13 @@ Read a conversation back, with all its messages oldest first.
   `"messages": [{"role": "patient" | "assistant", "text": "...", "intent": ..., "outcome": ..., "created_at": "..."}]`.
   `intent` and `outcome` are set on assistant messages only.
 - `404 not_found`: unknown id.
+
+## Emergencies (CFD-08)
+
+### `GET /api/v1/emergencies?status=open`
+Emergency flags for front-desk staff, newest first.
+
+- `status`: `open` (default) or `acknowledged`.
+- `200`: `[{"id": 1, "conversation_id": "<uuid>", "matched_rule": "chest_pain", "excerpt": "...", "status": "open", "created_at": "..."}]`.
+  `excerpt` is the first 200 characters of the patient's message.
+- `422 validation_error`: any other `status`.
