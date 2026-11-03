@@ -14,7 +14,7 @@ from clinic.workflows.nodes import NODES
 from clinic.workflows.nodes._stub import NOT_IMPLEMENTED, NOT_IMPLEMENTED_REPLY
 from clinic.workflows.nodes.safety import MissingReplyError
 from clinic.workflows.routing import route_intent, route_start
-from clinic.workflows.state import INTENTS, ConversationState, new_turn
+from clinic.workflows.state import INTENTS, ConversationState, new_turn, turn_id_for
 
 EXPECTED_NODES = {
     "classify",
@@ -56,7 +56,7 @@ def test_every_graph_node_is_a_stub_with_the_state_signature(
         assert list(inspect.signature(node).parameters) == ["state"], name
         assert hints["state"] is ConversationState, name
         assert hints["return"] == dict[str, object], name
-        assert isinstance(node({**new_turn("hello"), "reply": "ok"}), dict), name
+        assert isinstance(node({**new_turn("hello", "t1"), "reply": "ok"}), dict), name
 
 
 def test_a_turn_runs_end_to_end_with_an_honest_fallback(
@@ -64,7 +64,7 @@ def test_a_turn_runs_end_to_end_with_an_honest_fallback(
 ) -> None:
     graph = build_graph(make_settings(), None)
 
-    result = graph.invoke(new_turn("hello"))
+    result = graph.invoke(new_turn("hello", "t1"))
 
     assert result["outcome"] == NOT_IMPLEMENTED
     assert [type(m) for m in result["messages"]] == [HumanMessage, AIMessage]
@@ -84,22 +84,33 @@ def test_a_turn_without_a_reply_fails_loudly(
     graph = build_graph(make_settings(), None)
 
     with pytest.raises(MissingReplyError):
-        graph.invoke(new_turn("hello"))
+        graph.invoke(new_turn("hello", "t1"))
 
 
 def test_new_turn_clears_the_per_turn_fields() -> None:
-    state = new_turn("hi")
+    state = new_turn("hi", "t1")
     assert [m.text for m in state["messages"]] == ["hi"]
     assert state["intent"] == "unclear"
     assert (state["reply"], state["outcome"], state["sources"]) == ("", "", [])
     assert "offered_slots" not in state  # kept from earlier turns for "book the first one"
 
 
+def test_turn_ids_are_stable_and_name_both_messages(make_settings: Callable[..., Settings]) -> None:
+    turn_id = turn_id_for("conv-1", 3)
+    assert turn_id == turn_id_for("conv-1", 3) == "conv-1:3"
+    assert turn_id != turn_id_for("conv-1", 4)
+
+    result = build_graph(make_settings(), None).invoke(new_turn("hi", turn_id))
+
+    assert result["turn_id"] == "conv-1:3"
+    assert [m.id for m in result["messages"]] == ["conv-1:3:patient", "conv-1:3:reply"]
+
+
 # --- route_start ----------------------------------------------------------------------------
 
 
 def test_route_start_classifies_by_default() -> None:
-    assert route_start(new_turn("When is Dr. Salma free?")) == "classify"
+    assert route_start(new_turn("When is Dr. Salma free?", "t1")) == "classify"
     assert route_start({}) == "classify"
 
 
@@ -120,7 +131,7 @@ def test_route_start_declines_medical_advice_on_the_latest_patient_message() -> 
     }
 
     assert route_start(state, asks_for_advice) == "decline"
-    assert route_start(new_turn("book me in"), asks_for_advice) == "classify"
+    assert route_start(new_turn("book me in", "t1"), asks_for_advice) == "classify"
     assert seen == ["What cream should I use?", "book me in"]
 
 
@@ -171,7 +182,7 @@ def test_graph_uses_the_configured_confidence_threshold(
     visited: list[str] = []
     for threshold in (0.6, 0.4):
         graph = build_graph(make_settings(intent_min_confidence=threshold), None)
-        for update in graph.stream(new_turn("hi"), stream_mode="updates"):
+        for update in graph.stream(new_turn("hi", "t1"), stream_mode="updates"):
             visited.extend(update)
 
     assert "clarify" in visited[: visited.index("finalize")]  # 0.5 < 0.6

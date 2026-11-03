@@ -59,7 +59,18 @@ Primitives only (plus LangChain messages), so checkpoints load under
 | `approval_id` | Pending staff approval |
 | `status` | `active`, `awaiting_approval` or `closed` |
 
-Start every turn with `graph.invoke(new_turn(text), {"configurable": {"thread_id": conversation_id}})`:
+Start every turn with:
+
+```python
+turn_id = turn_id_for(conversation_id, turn_number)  # turn_number = patient messages stored + 1
+graph.invoke(new_turn(text, turn_id), {"configurable": {"thread_id": conversation_id}})
+```
+
+**Replay safety.** The patient message gets id `<turn_id>:patient` and the reply
+`<turn_id>:reply`, and `add_messages` replaces a message with the same id. If the graph ran but
+storing the turn in `messages` failed, the retry gets the same turn number and id, so it replaces
+that turn in the checkpoint instead of duplicating it.
+
 `new_turn` resets the per-turn fields so nothing leaks from the previous turn. It deliberately
 keeps `offered_slots` (for "book the first one"), `status` and `approval_id`. The approval flow
 (CFD-14) owns the last two and must set and clear them explicitly when a decision is applied.

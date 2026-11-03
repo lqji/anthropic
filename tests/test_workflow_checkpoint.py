@@ -25,7 +25,7 @@ from clinic.workflows.graph import ConversationGraph, build_graph
 from clinic.workflows.history import history_window
 from clinic.workflows.nodes import NODES
 from clinic.workflows.nodes.classify import classify
-from clinic.workflows.state import ConversationState, new_turn
+from clinic.workflows.state import ConversationState, new_turn, turn_id_for
 
 CHECKPOINT_TABLES = {
     "checkpoints",
@@ -99,8 +99,8 @@ def test_third_turn_after_restart_sees_all_earlier_messages(
 ) -> None:
     thread = _thread()
     with running_graph(settings) as graph:
-        graph.invoke(new_turn("first"), thread)
-        graph.invoke(new_turn("second"), thread)
+        graph.invoke(new_turn("first", "t1"), thread)
+        graph.invoke(new_turn("second", "t2"), thread)
 
     seen_by_classify: list[list[str]] = []
 
@@ -110,7 +110,7 @@ def test_third_turn_after_restart_sees_all_earlier_messages(
 
     monkeypatch.setitem(NODES, "classify", spying_classify)
     with running_graph(settings) as graph:  # new pool, saver and graph: a simulated restart
-        result = graph.invoke(new_turn("third"), thread)
+        result = graph.invoke(new_turn("third", "t3"), thread)
 
     texts = [m.text for m in result["messages"]]
     assert texts[0::2] == ["first", "second", "third"]
@@ -119,11 +119,35 @@ def test_third_turn_after_restart_sees_all_earlier_messages(
     assert seen_by_classify == [texts[:5]]
 
 
+def test_a_replayed_turn_replaces_itself_instead_of_duplicating(settings: Settings) -> None:
+    # The service ran turn 2 but failed to store it, so the patient's retry gets turn number 2
+    # again, after a restart in this test.
+    conversation_id = str(uuid4())
+    thread: RunnableConfig = {"configurable": {"thread_id": conversation_id}}
+    with running_graph(settings) as graph:
+        graph.invoke(new_turn("first", turn_id_for(conversation_id, 1)), thread)
+        graph.invoke(new_turn("second", turn_id_for(conversation_id, 2)), thread)
+    with running_graph(settings) as graph:
+        graph.invoke(new_turn("second", turn_id_for(conversation_id, 2)), thread)
+        graph.invoke(new_turn("third", turn_id_for(conversation_id, 3)), thread)
+        messages = graph.get_state(thread).values["messages"]
+
+    assert [m.text for m in messages if isinstance(m, HumanMessage)] == [
+        "first",
+        "second",
+        "third",
+    ]
+    assert len(messages) == 6
+    assert [m.id for m in messages] == [
+        f"{conversation_id}:{n}:{role}" for n in (1, 2, 3) for role in ("patient", "reply")
+    ]
+
+
 def test_threads_do_not_share_context(settings: Settings) -> None:
     first, second = _thread(), _thread()
     with running_graph(settings) as graph:
-        graph.invoke(new_turn("only in the first thread"), first)
-        result = graph.invoke(new_turn("hello"), second)
+        graph.invoke(new_turn("only in the first thread", "t1"), first)
+        result = graph.invoke(new_turn("hello", "t1"), second)
 
     assert [m.text for m in result["messages"] if isinstance(m, HumanMessage)] == ["hello"]
 
@@ -282,7 +306,7 @@ def test_window_of_thirty_checkpointed_messages_is_the_last_ten(settings: Settin
     thread = _thread()
     with running_graph(settings) as graph:
         for n in range(15):  # 15 turns = 15 patient messages + 15 replies
-            graph.invoke(new_turn(f"message {n}"), thread)
+            graph.invoke(new_turn(f"message {n}", f"t{n}"), thread)
         messages = graph.get_state(thread).values["messages"]
 
     window = history_window(messages, settings.history_window)

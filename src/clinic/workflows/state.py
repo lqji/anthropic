@@ -21,8 +21,10 @@ INTENTS: Final = (CLINIC_QUESTION, FIND_SLOTS, BOOK, CANCEL, OTHER, UNCLEAR)
 
 
 class ConversationState(TypedDict, total=False):
-    # Whole history; `add_messages` appends what a node returns instead of replacing the list.
+    # Whole history. `add_messages` appends what a node returns, but replaces a message with the
+    # same id: that is what makes a replayed turn safe (see `new_turn`).
     messages: Annotated[list[AnyMessage], add_messages]
+    turn_id: str  # id of the current turn, see `turn_id_for`
     # Set by `classify` (CFD-07) for the current turn.
     intent: str
     confidence: float
@@ -37,10 +39,25 @@ class ConversationState(TypedDict, total=False):
     status: str  # conversation status after the turn: active | awaiting_approval | closed
 
 
-def new_turn(text: str) -> ConversationState:
-    """Graph input for one patient message. Clears the per-turn fields left by the last turn."""
+def turn_id_for(conversation_id: str, turn_number: int) -> str:
+    """Stable id of a turn: the same conversation and turn number always give the same id.
+
+    The caller numbers turns from what it has stored (e.g. patient messages stored so far + 1), so
+    a retry of a turn whose storing failed gets the same number, and so the same id.
+    """
+    return f"{conversation_id}:{turn_number}"
+
+
+def new_turn(text: str, turn_id: str) -> ConversationState:
+    """Graph input for one patient message. Clears the per-turn fields left by the last turn.
+
+    The patient message gets the id `<turn_id>:patient` and `finalize` gives the reply
+    `<turn_id>:reply`. Replaying a turn with the same id therefore replaces both messages in the
+    checkpoint instead of appending duplicates.
+    """
     return {
-        "messages": [HumanMessage(content=text)],
+        "messages": [HumanMessage(content=text, id=f"{turn_id}:patient")],
+        "turn_id": turn_id,
         "intent": UNCLEAR,
         "confidence": 0.0,
         "entities": {},

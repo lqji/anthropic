@@ -17,9 +17,10 @@ def finalize(state: ConversationState) -> dict[str, object]:
     """Append this turn's reply to the history. CFD-09 adds the output guard here.
 
     Every path must set `reply`. A missing one fails the turn loudly (500, logged) instead of
-    being papered over with a generic message.
+    being papered over with a generic message. The reply's id comes from the turn id, so a
+    replayed turn replaces its earlier reply.
     """
     reply = state.get("reply", "")
     if not reply.strip():
         raise MissingReplyError(f"turn ended without a reply (outcome={state.get('outcome')!r})")
-    return {"messages": [AIMessage(content=reply)]}
+    return {"messages": [AIMessage(content=reply, id=f"{state['turn_id']}:reply")]}
