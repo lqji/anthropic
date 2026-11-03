@@ -39,7 +39,7 @@ _NODE_FOR_INTENT: Final[dict[str, IntentRoute]] = {
 
 
 def never(text: str) -> bool:
-    """Default medical-advice check until CFD-09 plugs in the real one."""
+    """Medical-advice check that never matches: for routing-only unit tests."""
     return False
 
 

@@ -229,3 +229,20 @@ def test_openai_adapter_cannot_be_built_with_the_fake_provider(
 ) -> None:
     with pytest.raises(RuntimeError, match="LLM_PROVIDER=openai"):
         OpenAILLM(make_settings(llm_provider="fake"))
+
+
+def test_every_system_prompt_carries_the_no_diagnosis_rule(openai_settings: Settings) -> None:
+    classified = adapter._ClassifyOut(
+        intent="other", doctor=None, specialty=None, date=None, confidence=1.0
+    )
+    answered = adapter._AnswerOut(found=True, text="We open at 8 am.", source="opening-hours.md")
+    classify_client = StubClient(parsed=classified)
+    answer_client = StubClient(parsed=answered)
+
+    _llm(openai_settings, classify_client).classify("hello", CONTEXT)
+    _llm(openai_settings, answer_client).answer("When open?", PASSAGES)
+
+    for client in (classify_client, answer_client):
+        system = client.calls[0]["messages"][0]
+        assert system["role"] == "system"
+        assert adapter.NO_DIAGNOSIS_RULE in system["content"]
