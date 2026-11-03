@@ -10,7 +10,16 @@ from clinic.config import Settings
 from clinic.domain.guard import asks_for_medical_advice
 from clinic.workflows.deps import WorkflowDeps
 from clinic.workflows.nodes import NODES, wired_nodes
-from clinic.workflows.routing import INTENT_ROUTES, START_ROUTES, route_intent, route_start
+from clinic.workflows.routing import (
+    CANCEL_ROUTES,
+    INTENT_ROUTES,
+    REQUEST_ROUTES,
+    START_ROUTES,
+    route_after_cancel,
+    route_after_request,
+    route_intent,
+    route_start,
+)
 from clinic.workflows.state import ConversationState
 
 ConversationGraph = CompiledStateGraph[
@@ -24,8 +33,6 @@ _EDGES: tuple[tuple[str, str], ...] = (
     ("find_slots", "finalize"),
     ("book", "confirm_booking"),
     ("confirm_booking", "finalize"),
-    ("cancel", "request_approval"),
-    ("request_approval", "await_approval"),
     ("await_approval", "apply_decision"),
     ("apply_decision", "finalize"),
     ("clarify", "finalize"),
@@ -59,6 +66,8 @@ def build_graph(
         partial(route_intent, min_confidence=settings.intent_min_confidence),
         list(INTENT_ROUTES),
     )
+    builder.add_conditional_edges("cancel", route_after_cancel, list(CANCEL_ROUTES))
+    builder.add_conditional_edges("request_approval", route_after_request, list(REQUEST_ROUTES))
     for source, target in _EDGES:
         builder.add_edge(source, target)
     builder.add_edge("finalize", END)

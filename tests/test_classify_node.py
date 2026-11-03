@@ -70,7 +70,11 @@ def _run(deps: WorkflowDeps, text: str) -> tuple[dict[str, Any], list[str]]:
         graph: ConversationGraph = build_graph(deps.settings, PostgresSaver(checkpoint_pool), deps)
         visited = [
             node
-            for update in graph.stream(new_turn(text, "t1"), thread, stream_mode="updates")
+            for update in graph.stream(
+                new_turn(text, "t1", conversation_id="c1", patient_ref="p1"),
+                thread,
+                stream_mode="updates",
+            )
             for node in update
         ]
         return dict(graph.get_state(thread).values), visited

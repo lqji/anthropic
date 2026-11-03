@@ -5,7 +5,8 @@ from uuid import UUID
 from langchain_core.runnables import RunnableConfig
 from psycopg_pool import ConnectionPool
 
-from clinic.repositories import messages
+from clinic.errors import NotFound
+from clinic.repositories import conversations, messages
 from clinic.services.turn import Source, TurnResult
 from clinic.workflows.graph import ConversationGraph
 from clinic.workflows.state import UNCLEAR, new_turn, turn_id_for
@@ -26,15 +27,22 @@ class GraphWorkflow:
 
     def run_turn(self, conversation_id: str, text: str) -> TurnResult:
         with self._pool.connection() as conn:  # released before the graph runs
-            turn_number = messages.count_graph_turns(conn, UUID(conversation_id)) + 1
+            conversation = conversations.get(conn, UUID(conversation_id))
+            if conversation is None:
+                raise NotFound("conversation not found")
+            turn_number = messages.count_graph_turns(conn, conversation.id) + 1
         turn_id = turn_id_for(conversation_id, turn_number)
         config: RunnableConfig = {"configurable": {"thread_id": conversation_id}}
-        values = self._graph.invoke(new_turn(text, turn_id), config)
+        turn = new_turn(
+            text, turn_id, conversation_id=conversation_id, patient_ref=conversation.patient_ref
+        )
+        values = self._graph.invoke(turn, config)
         return TurnResult(
             reply=str(values["reply"]),
             intent=str(values.get("intent", UNCLEAR)),
             outcome=str(values["outcome"]),
-            status=str(values.get("status", "active")),  # nodes set it once CFD-14 lands
+            status=str(values.get("status", "active")),
+            approval_id=values.get("approval_id"),  # set while the turn waits for staff
             sources=tuple(
                 Source(document=source["document"], heading=source["heading"])
                 for source in values.get("sources", [])

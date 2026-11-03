@@ -18,7 +18,11 @@ from clinic.workflows.state import (
 
 StartRoute = Literal["classify", "decline"]
 IntentRoute = Literal["knowledge", "find_slots", "book", "cancel", "other", "clarify"]
+CancelRoute = Literal["request_approval", "finalize"]
+RequestRoute = Literal["await_approval", "finalize"]
 
+CANCEL_ROUTES: Final[tuple[CancelRoute, ...]] = ("request_approval", "finalize")
+REQUEST_ROUTES: Final[tuple[RequestRoute, ...]] = ("await_approval", "finalize")
 START_ROUTES: Final[tuple[StartRoute, ...]] = ("classify", "decline")
 INTENT_ROUTES: Final[tuple[IntentRoute, ...]] = (
     "knowledge",
@@ -61,6 +65,16 @@ def route_start(
     if asks_for_medical_advice(latest_patient_text(state)):
         return "decline"
     return "classify"
+
+
+def route_after_cancel(state: ConversationState) -> CancelRoute:
+    """Ask staff when `cancel` found exactly one booking; else the turn already has its answer."""
+    return "request_approval" if state.get("booking_id") is not None else "finalize"
+
+
+def route_after_request(state: ConversationState) -> RequestRoute:
+    """Pause for the decision when an approval was created; else (lost a race) the turn is done."""
+    return "await_approval" if state.get("approval_id") is not None else "finalize"
 
 
 def route_intent(state: ConversationState, min_confidence: float) -> IntentRoute:
