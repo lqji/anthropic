@@ -8,8 +8,8 @@ from fastapi import FastAPI
 from langgraph.checkpoint.postgres import PostgresSaver
 
 from clinic import __version__
-from clinic.api import health
-from clinic.clock import SystemClock
+from clinic.api import appointments, health
+from clinic.clock import Clock, SystemClock
 from clinic.config import Settings
 from clinic.db import (
     CONNECT_TIMEOUT_S,
@@ -23,7 +23,9 @@ from clinic.llm import make_llm
 from clinic.locks import ConversationLocks
 from clinic.observability import configure_logging, install_request_logging
 from clinic.schema import apply_schema
+from clinic.seed import seed_appointments
 from clinic.workflows.checkpointer import setup_checkpointer
+from clinic.workflows.deps import WorkflowDeps
 from clinic.workflows.graph import build_graph
 
 logger = logging.getLogger("clinic.startup")
@@ -45,11 +47,12 @@ def is_unreachable(exc: psycopg.OperationalError) -> bool:
     return sqlstate is None or sqlstate.startswith("08") or sqlstate in _RETRYABLE_SQLSTATES
 
 
-def prepare_database(settings: Settings) -> bool:
-    """Create the app tables and the checkpoint tables. True when done.
+def prepare_database(settings: Settings, clock: Clock) -> bool:
+    """Create the app tables, seed the demo slots on first start, set up checkpointing.
 
-    Both steps are idempotent, so they run on every start. An unreachable database is logged and
-    gives False, so the api still starts and /health can report it; any other error stops startup.
+    True when done. Every step is idempotent, so they run on every start. An unreachable database
+    is logged and gives False, so the api still starts and /health can report it; any other error
+    stops startup.
     """
     try:
         with psycopg.connect(
@@ -58,6 +61,7 @@ def prepare_database(settings: Settings) -> bool:
             options=f"-c statement_timeout={SETUP_STATEMENT_TIMEOUT_MS}",
         ) as conn:
             apply_schema(conn)
+            seed_appointments(conn, settings.clinic_timezone, clock.now())
         setup_checkpointer(settings.database_url)
     except psycopg.OperationalError as exc:
         if not is_unreachable(exc):
@@ -76,7 +80,7 @@ def prepare_database(settings: Settings) -> bool:
     return True
 
 
-def keep_preparing(settings: Settings, stop: threading.Event) -> None:
+def keep_preparing(settings: Settings, clock: Clock, stop: threading.Event) -> None:
     """Retry `prepare_database` until it succeeds or the app shuts down.
 
     Only an unreachable database is retried (see `is_unreachable`). Any other error (SQL bug,
@@ -85,7 +89,7 @@ def keep_preparing(settings: Settings, stop: threading.Event) -> None:
     """
     while not stop.wait(PREPARE_RETRY_S):
         try:
-            prepared = prepare_database(settings)
+            prepared = prepare_database(settings, clock)
         except Exception:
             logger.exception("startup.database_prepare_failed")
             return
@@ -94,18 +98,20 @@ def keep_preparing(settings: Settings, stop: threading.Event) -> None:
             return
 
 
-def create_app(settings: Settings) -> FastAPI:
+def create_app(settings: Settings, *, clock: Clock | None = None) -> FastAPI:
+    """`clock` defaults to the system clock; tests pass a FixedClock."""
     configure_logging()
+    app_clock = clock or SystemClock()
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         stop_retry = threading.Event()
         retry: threading.Thread | None = None
-        if not prepare_database(settings):
+        if not prepare_database(settings, app_clock):
             # The database may come up after the api: keep trying in the background.
             retry = threading.Thread(
                 target=keep_preparing,
-                args=(settings, stop_retry),
+                args=(settings, app_clock, stop_retry),
                 name="prepare-database",
                 daemon=True,
             )
@@ -118,10 +124,14 @@ def create_app(settings: Settings) -> FastAPI:
         app.state.deps = Deps(
             settings=settings,
             pool=pool,
-            clock=SystemClock(),
+            clock=app_clock,
             locks=ConversationLocks(),
             llm=make_llm(settings),
-            graph=build_graph(settings, PostgresSaver(checkpoint_pool)),
+            graph=build_graph(
+                settings,
+                PostgresSaver(checkpoint_pool),
+                WorkflowDeps(settings=settings, pool=pool, clock=app_clock),
+            ),
         )
         try:
             yield
@@ -136,4 +146,5 @@ def create_app(settings: Settings) -> FastAPI:
     install_request_logging(app)
     install_error_handlers(app)
     app.include_router(health.router)
+    app.include_router(appointments.router)
     return app

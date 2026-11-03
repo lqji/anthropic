@@ -56,3 +56,6 @@ Filled in by CFD-16 (VM runbook, `scripts/smoke_test.sh`, rollback between two l
 - A pending approval never expires.
 - While a conversation waits for approval, every non-emergency message gets "still waiting".
 - English only.
+- Demo slots are seeded once, on the first start, for 5 days from that day (2 doctors, 30-minute
+  slots 09:00-13:00 and 14:00-19:00). They do not roll forward: after 5 days there are no future
+  slots until the database is reset with `docker compose down -v`.

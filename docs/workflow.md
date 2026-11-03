@@ -35,7 +35,10 @@ flowchart LR
 | `decline`, `finalize` | `nodes/safety.py` | CFD-09 |
 
 Every node is `def node(state: ConversationState) -> dict[str, object]` and returns only the
-fields it changes. Until its story lands, a node is a stub that replies with an honest
+fields it changes. A node that needs the database is built once by a factory
+(`make_find_slots(deps)`) with a `WorkflowDeps` (settings, pool, clock), so its signature stays the
+same. `build_graph(settings, checkpointer, deps)` uses those real nodes; without `deps` every node
+is its stub (routing-only tests). Until its story lands, a node is a stub that replies with an honest
 "can't help with that here yet, please call the front desk" (`outcome: "not_implemented"`).
 
 ## Routing (`routing.py`)
@@ -74,6 +77,16 @@ that turn in the checkpoint instead of duplicating it.
 `new_turn` resets the per-turn fields so nothing leaks from the previous turn. It deliberately
 keeps `offered_slots` (for "book the first one"), `status` and `approval_id`. The approval flow
 (CFD-14) owns the last two and must set and clear them explicitly when a decision is applied.
+
+## `find_slots` (CFD-12)
+
+Reads `doctor` or `specialty` and `date` (`YYYY-MM-DD`) from `entities`. A missing, invalid or past
+date means today, from now on. It replies with up to 5 numbered free slots in clinic time
+(`outcome: "slots_listed"`) and stores them as `offered_slots`:
+`[{"slot_id", "doctor_id", "doctor", "starts_at"}]`, so "book the first one" (CFD-13) can use them.
+If that day has none, it says so and offers the next day that has free slots
+(`outcome: "no_slots"`). An unknown or missing doctor gets a question listing the doctors
+(`outcome: "clarify"`) and leaves earlier `offered_slots` untouched.
 
 ## History window (`history.py`)
 
