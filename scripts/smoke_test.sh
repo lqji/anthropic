@@ -17,7 +17,7 @@ set -u -o pipefail
 BASE_URL="${1:-${BASE_URL:-http://localhost:8000}}"
 BASE_URL="${BASE_URL%/}"
 CLINIC_TIMEZONE="${CLINIC_TIMEZONE:-Asia/Muscat}"
-TIMEOUT_S=30
+TIMEOUT_S=60   # longer than one model call can take: LLM_TIMEOUT_S 20 plus a retry
 
 for tool in curl jq; do
   command -v "$tool" >/dev/null 2>&1 || { echo "FAIL setup: $tool is not installed" >&2; exit 1; }
@@ -28,6 +28,7 @@ STATUS=""
 BODY=""
 CHECKS=0
 CONVERSATION=""
+EMERGENCY_SKIPPED=0
 BOOKED=0     # 1 once the test booking exists, 0 again once the cancellation was approved
 
 fail() { # fail <check> <what was wrong>
@@ -195,6 +196,7 @@ pass "cancellation: paused for staff, approved, booking cancelled"
 # (there is no endpoint to close it); its text starts with "SMOKE TEST" so staff can tell it apart.
 # Off by default so that a run against a live system never raises a flag; RUN_EMERGENCY=1 turns it on.
 if [ "${RUN_EMERGENCY:-}" != 1 ]; then
+  EMERGENCY_SKIPPED=1
   echo "skip emergency check (set RUN_EMERGENCY=1 to include it; it leaves a flag for staff)"
 else
   say "SMOKE TEST: I have crushing chest pain"
@@ -208,4 +210,8 @@ else
   pass "emergency: answered at once and flagged for staff"
 fi
 
-echo "Smoke test passed: $CHECKS checks against $BASE_URL"
+if [ "$EMERGENCY_SKIPPED" = 1 ]; then
+  echo "Smoke test passed: $CHECKS checks against $BASE_URL (the emergency check was skipped)"
+else
+  echo "Smoke test passed: $CHECKS checks against $BASE_URL"
+fi
