@@ -13,6 +13,7 @@ from clinic.app import prepare_database
 from clinic.clock import FixedClock
 from clinic.config import Settings
 from clinic.db import make_checkpoint_pool, make_pool
+from clinic.llm import FakeLLM
 from clinic.workflows.deps import WorkflowDeps
 from clinic.workflows.graph import build_graph
 from clinic.workflows.nodes import NODES
@@ -35,7 +36,7 @@ def deps(database_url: str) -> Iterator[WorkflowDeps]:
         pool = make_pool(settings)
         pool.open(wait=True, timeout=10)
         try:
-            yield WorkflowDeps(settings=settings, pool=pool, clock=clock)
+            yield WorkflowDeps(settings=settings, pool=pool, clock=clock, llm=FakeLLM())
         finally:
             pool.close(timeout=5)
 

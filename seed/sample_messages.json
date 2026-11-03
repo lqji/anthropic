@@ -1,0 +1,18 @@
+[
+  {"text": "What time do you open on Sunday?", "intent": "clinic_question", "node": "knowledge"},
+  {"text": "Do you accept my insurance?", "intent": "clinic_question", "node": "knowledge"},
+  {"text": "How should I prepare for my visit?", "intent": "clinic_question", "node": "knowledge"},
+  {"text": "What is your cancellation policy?", "intent": "clinic_question", "node": "knowledge"},
+  {"text": "When is Dr. Salma free on Thursday?", "intent": "find_slots", "node": "find_slots"},
+  {"text": "Any slots in Dermatology tomorrow?", "intent": "find_slots", "node": "find_slots"},
+  {"text": "Is Dr. Khalid available on 2026-11-04?", "intent": "find_slots", "node": "find_slots"},
+  {"text": "I want to book an appointment with Dr. Khalid tomorrow", "intent": "book", "node": "book"},
+  {"text": "Please book me with Dr. Salma on Friday", "intent": "book", "node": "book"},
+  {"text": "Reserve a time in General Practice on Wednesday", "intent": "book", "node": "book"},
+  {"text": "I need to cancel my appointment", "intent": "cancel", "node": "cancel"},
+  {"text": "Cancel my visit on Thursday please", "intent": "cancel", "node": "cancel"},
+  {"text": "Hello", "intent": "other", "node": "other"},
+  {"text": "Thanks, bye", "intent": "other", "node": "other"},
+  {"text": "asdf qwer", "intent": "unclear", "node": "clarify"},
+  {"text": "Book me with Dr. Zaid tomorrow", "intent": "book", "node": "clarify"}
+]

@@ -19,6 +19,13 @@ OTHER: Final = "other"
 UNCLEAR: Final = "unclear"
 INTENTS: Final = (CLINIC_QUESTION, FIND_SLOTS, BOOK, CANCEL, OTHER, UNCLEAR)
 
+# Entity keys `classify` sets when the patient names a doctor or specialty that is not in the
+# catalogue. The router sends `find_slots` and `book` with one of them to `clarify`, which lists
+# `valid_choices` instead of guessing.
+UNKNOWN_DOCTOR: Final = "unknown_doctor"
+UNKNOWN_SPECIALTY: Final = "unknown_specialty"
+VALID_CHOICES: Final = "valid_choices"
+
 
 class ConversationState(TypedDict, total=False):
     # Whole history. `add_messages` appends what a node returns, but replaces a message with the
