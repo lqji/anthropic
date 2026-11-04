@@ -147,7 +147,7 @@ def sweep(conn: Connection[TupleRow], question: str) -> str:
 def run(database_url: str) -> list[str]:
     """Run the whole experiment and return what it observed, one line per fact."""
     seen: list[str] = []
-    with psycopg.connect(database_url) as conn:
+    with psycopg.connect(database_url, connect_timeout=10) as conn:  # every external call: timeout
         apply_schema(conn)  # the app's own tables (src/clinic/sql), as at startup
         KnowledgeLoader(DOCS_DIR).load(conn)  # the real loader: heading sections, max 200 words
         conn.commit()
@@ -182,6 +182,8 @@ def run(database_url: str) -> list[str]:
             seen.append(f"   1.{number}: {sweep(conn, question)}")
 
         # 3. The same with the 2-word rule off: the same SQL with MIN_MATCHED_TERMS = 1.
+        # `search` reads the module constant on every call, so patching it for this block runs the
+        # service's own query with the rule off, without copying its SQL here; it is restored after.
         with mock.patch.object(retriever, "MIN_MATCHED_TERMS", 1):
             for number in (5, 6, 7):
                 question, expected = QUESTIONS[number - 1]

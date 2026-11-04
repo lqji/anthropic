@@ -179,8 +179,9 @@ say "not covered". ADR `rag-design` records this.
   the model less context for questions that span two sections (the insurance section is split in
   two).
 - **Words, not meaning.** "Do you take my health plan?" finds nothing: each chunk shares at
-  most one of its words ("health" or "take"), and no document says "plan". Paraphrases need the clinic's wording, or a later
-  issue that adds synonyms (a PostgreSQL thesaurus dictionary) without leaving full-text search.
+  most one of its words ("health" or "take"), and no document says "plan". Paraphrases need the
+  clinic's wording, or a later issue that adds synonyms (a PostgreSQL thesaurus dictionary)
+  without leaving full-text search.
 - **English only.** The English stemmer and stop words are used for documents and questions. A
   question in Arabic, likely in a clinic in Muscat, would match nothing and get "not covered". Not
   tested here.
