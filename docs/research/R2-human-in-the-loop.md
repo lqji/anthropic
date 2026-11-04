@@ -116,16 +116,19 @@ safe to run twice. This is what ADR `approval-design` records.
 
 ## Agreement with R1 (CFD-32)
 
-Status: **not compared yet.** The R1 note (CFD-32, issue #47, MrSn001) is not on `v0.1.1`, so
-there is nothing to compare against. This PR must not be merged until the last column below is
-filled in with what R1 says. If R1 says anything different, one of the two notes changes, not
-the code.
+Compared with the R1 note (CFD-32, issue #47, PR #53, MrSn001): `docs/research/R1-checkpoints.md`
+and `docs/adr/checkpoint-design.md`. The two notes agree on one checkpoint design. No note and no
+code had to change.
 
-What R2 assumes about checkpoints, and where the code does it:
-
-| Design point | R2 says (and the code) | R1 (#47) says |
+| Design point | R2 says (and the code) | R1 says |
 |---|---|---|
-| Saver | One `PostgresSaver` on its own connection pool (`db.py`, `app.py`) | to fill in |
-| Thread id | `thread_id` is the conversation id (`GraphWorkflow`, `GraphApprovalResumer`) | to fill in |
-| Source of truth | The checkpoint decides where a workflow continues; `conversations.status` is only a copy | to fill in |
-| In-memory saver | `InMemorySaver` only in `experiments/` | to fill in |
+| Saver | One `PostgresSaver` on its own connection pool (`db.py`, `app.py`) | Same |
+| Thread id | `thread_id` is the conversation id (`GraphWorkflow`, `GraphApprovalResumer`) | Same |
+| Source of truth | The checkpoint decides where a workflow continues; `conversations.status` is only a copy | Same: its restart demo resumed from the checkpoint |
+| In-memory saver | `InMemorySaver` only in `experiments/` | Same |
+| State shape | The paused state is plain data (`ApprovalState`) | Same: with strict msgpack a dataclass came back as a dict (R1 finding 7) |
+
+What R1 adds that supports this note: its findings 3 and 4 show that a new connection, saver and
+graph on the same database still have the whole conversation, so the approval pause, which is one
+more checkpoint, survives a restart for the same reason. This note's own experiment cannot show
+that, because it uses `InMemorySaver`.
