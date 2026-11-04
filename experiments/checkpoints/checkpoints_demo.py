@@ -91,8 +91,11 @@ def remembered(graph: Graph, thread_id: str) -> int:
 
 
 def connect(database_url: str) -> Connection[DictRow]:
-    """The connection settings PostgresSaver needs; the service's checkpoint pool uses the same."""
-    return psycopg.connect(database_url, autocommit=True, row_factory=dict_row)
+    """Autocommit and dict rows, which PostgresSaver needs, as in the service's checkpoint pool.
+
+    `connect_timeout` so an unreachable database fails after 5 s instead of hanging.
+    """
+    return psycopg.connect(database_url, autocommit=True, row_factory=dict_row, connect_timeout=5)
 
 
 def rows_per_table(conn: Connection[DictRow], thread_id: str) -> str:
