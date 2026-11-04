@@ -37,8 +37,10 @@ from langgraph.graph.state import CompiledStateGraph
 from psycopg import Connection
 from psycopg.rows import DictRow, dict_row
 
+from clinic.db import CONNECT_TIMEOUT_S, STATEMENT_TIMEOUT_MS
 from clinic.llm.fake import FakeLLM
 from clinic.llm.port import ClassifyContext
+from clinic.workflows.checkpointer import setup_checkpointer
 from clinic.workflows.history import history_window
 
 TODAY = dt.date(2026, 11, 4)
@@ -93,9 +95,16 @@ def remembered(graph: Graph, thread_id: str) -> int:
 def connect(database_url: str) -> Connection[DictRow]:
     """Autocommit and dict rows, which PostgresSaver needs, as in the service's checkpoint pool.
 
-    `connect_timeout` so an unreachable database fails after 5 s instead of hanging.
+    With the service's timeouts, so an unreachable database or a stuck query fails after 5 s
+    instead of hanging: `connect_timeout` bounds connecting, `statement_timeout` each query.
     """
-    return psycopg.connect(database_url, autocommit=True, row_factory=dict_row, connect_timeout=5)
+    return psycopg.connect(
+        database_url,
+        autocommit=True,
+        row_factory=dict_row,
+        connect_timeout=CONNECT_TIMEOUT_S,
+        options=f"-c statement_timeout={STATEMENT_TIMEOUT_MS}",
+    )
 
 
 def rows_per_table(conn: Connection[DictRow], thread_id: str) -> str:
@@ -166,9 +175,10 @@ def run(database_url: str) -> list[str]:
     restarted = build(InMemorySaver())
     seen.append(f"   after restart: anna={remembered(restarted, anna)} (state gone)")
 
-    # 2. Postgres, the same conversations. setup() creates the tables (idempotent).
+    # 2. Postgres, the same conversations. The service's own setup creates the tables
+    # (idempotent), on its own connection with the long setup timeout, as at startup.
+    setup_checkpointer(database_url)
     with connect(database_url) as conn:
-        PostgresSaver(conn).setup()
         graph = build(PostgresSaver(conn, serde=STRICT))
         say(graph, anna, "What are your opening hours?")
         seen.append(f"2. postgres, anna turn 1: rows {rows_per_table(conn, anna)}")
