@@ -1,0 +1,4 @@
+# Check out every text file with LF line endings, whatever core.autocrlf says on the machine.
+# With core.autocrlf=true a Linux clone gets CRLF, and scripts/smoke_test.sh then fails with
+# "env: 'bash\r': No such file or directory" (found in the fresh-clone test, docs/fresh-clone-test.md).
+* text=auto eol=lf
