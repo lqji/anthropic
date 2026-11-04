@@ -6,13 +6,15 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import psycopg
+import pytest
 from fastapi.testclient import TestClient
 
 from clinic.app import create_app
 from clinic.clock import FixedClock
 from clinic.config import Settings
 from clinic.domain.schedule import day_bounds, local_date, slot_starts
-from clinic.seed import SEED_DAYS, seed_slots
+from clinic.schema import apply_schema
+from clinic.seed import SEED_DAYS, seed_appointments, seed_slots
 from tests.conftest import temporary_database
 
 ENV_EXAMPLE = Path(__file__).resolve().parents[1] / ".env.example"
@@ -103,3 +105,17 @@ def test_first_start_seeds_and_a_restart_adds_nothing(database_url: str) -> None
     assert counts == (2, 2, 180, 180)
     assert per_doctor_day == [(18,)]
     assert first_day == (FIRST_DAY,)  # seeded from today, so same-day slots exist
+
+
+def test_a_seed_folder_without_doctors_stops_startup_and_seeds_nothing(
+    database_url: str, tmp_path: Path
+) -> None:
+    (tmp_path / "seed").mkdir()  # exists, holds no .sql files
+    with temporary_database(database_url) as url, psycopg.connect(url, autocommit=True) as conn:
+        apply_schema(conn)
+        with pytest.raises(ValueError, match="added no doctors"):
+            seed_appointments(
+                conn, tmp_path, "Asia/Muscat", datetime(2026, 11, 2, 8, 0, tzinfo=UTC)
+            )
+        row = conn.execute("SELECT (SELECT count(*) FROM doctors), (SELECT count(*) FROM slots)")
+        assert row.fetchone() == (0, 0)

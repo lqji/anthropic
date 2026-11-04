@@ -33,12 +33,16 @@ def seed_appointments(
 
     The catalogue is SQL; the slots are built here because they need the injected Clock and the
     clinic time zone. One transaction: a failed seed leaves nothing and is retried next start.
+    A seed folder that adds no doctors is an error, not a silent empty clinic.
     """
     with conn.transaction():
         if appointments.has_doctors(conn):
             return False
         for path in sql_files(db_dir, "seed"):
             conn.execute(path.read_text(encoding="utf-8"))
-        slots = seed_slots(appointments.doctor_ids(conn), local_date(now, timezone), timezone)
+        doctor_ids = appointments.doctor_ids(conn)
+        if not doctor_ids:
+            raise ValueError(f"{db_dir / 'seed'} added no doctors: put the catalogue SQL there")
+        slots = seed_slots(doctor_ids, local_date(now, timezone), timezone)
         appointments.insert_slots(conn, slots)
     return True
