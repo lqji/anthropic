@@ -24,7 +24,7 @@ db/seed/NN_*.sql       demo specialties and doctors (applied once, while there a
 seed/clinic_docs/      the 6 clinic documents (Markdown), loaded and chunked at start
 seed/sample_messages.json  sample patient messages for every intent, and emergencies
 src/clinic/            api -> services -> workflows -> repositories; domain; llm; rag
-docs/                  api.md (incl. the audit list), workflow.md, adr/ (decision records)
+docs/                  architecture.md (diagrams, API table, risks), api.md (incl. the audit list), workflow.md, adr/ (decision records)
 scripts/smoke_test.sh  post-deploy check
 tests/                 pytest (real PostgreSQL, FakeLLM)
 ```
