@@ -130,7 +130,9 @@ A model outage raises `LLMUnavailable` (API 503) before the turn writes anything
 lists the valid names instead, and never repeats what the patient typed. `other` replies with a
 fixed capabilities message (`outcome: "other"`). Neither reply is written by the model, and neither
 writes to the database. `seed/sample_messages.json` holds sample patient messages with the intent
-and node each must reach; a test runs them through the graph.
+and node each must reach; a test runs them through the graph. Its emergency samples never reach
+the graph: they carry the `outcome` and the safety `rule` the API returns, checked in
+`tests/test_emergency_api.py`.
 
 ## `find_slots` (CFD-12)
 

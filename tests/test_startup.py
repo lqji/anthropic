@@ -22,6 +22,8 @@ from clinic.schema import DEFAULT_DB_DIR, apply_schema, sql_files
 from tests.conftest import temporary_database
 
 SEED_DIR = Path(__file__).resolve().parents[1] / "seed" / "clinic_docs"
+# Every seed document loads, so the documents table has one row per file.
+SEED_DOCUMENTS = (len(list(SEED_DIR.glob("*.md"))),)
 
 
 def test_schema_files_are_in_order() -> None:
@@ -57,7 +59,7 @@ def test_startup_creates_tables_and_loads_documents(
 
     with psycopg.connect(database_url, connect_timeout=5) as conn:
         row = conn.execute("SELECT count(*) FROM documents").fetchone()
-    assert row == (4,)
+    assert row == SEED_DOCUMENTS
 
 
 def test_startup_with_database_down_logs_and_still_serves_health(
@@ -104,12 +106,12 @@ def test_database_back_after_failed_start_is_prepared_by_retry(
                     loaded = conn.execute("SELECT count(*) FROM documents").fetchone()
                 except psycopg.errors.UndefinedTable:
                     loaded = None
-            if loaded == (4,):
+            if loaded == SEED_DOCUMENTS:
                 break
             time.sleep(0.05)
 
     assert calls == 2
-    assert loaded == (4,)
+    assert loaded == SEED_DOCUMENTS
 
 
 def test_retry_that_hits_another_error_logs_it_and_stops(
@@ -171,7 +173,7 @@ def test_prepare_database_loads_the_documents_and_creates_the_checkpoint_tables(
     with psycopg.connect(database_url, connect_timeout=5) as conn:
         documents = conn.execute("SELECT count(*) FROM documents").fetchone()
         checkpoints = conn.execute("SELECT to_regclass('checkpoints') IS NOT NULL").fetchone()
-    assert documents == (4,)  # the document load runs inside prepare_database...
+    assert documents == SEED_DOCUMENTS  # the document load runs inside prepare_database...
     assert checkpoints == (True,)  # ...next to the checkpoint setup CFD-05 does
 
 

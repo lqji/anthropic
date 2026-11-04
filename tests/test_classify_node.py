@@ -31,6 +31,9 @@ from tests.conftest import temporary_database
 
 NOW = datetime(2026, 11, 2, 8, 0, tzinfo=UTC)  # Monday 12:00 at the clinic (UTC+4)
 SAMPLES = json.loads((Path(__file__).parent.parent / "seed" / "sample_messages.json").read_text())
+# Emergencies never reach the graph: the service answers them before any model call. They are
+# checked in tests/test_emergency_api.py.
+GRAPH_SAMPLES = [sample for sample in SAMPLES if sample["intent"] != "emergency"]
 DOCTORS = ("Dr. Khalid Rahman", "Dr. Layla Hassan", "Dr. Salma Nasser", "Dr. Yusuf Mansoor")
 SPECIALTIES = ("Dermatology", "General Practice")
 
@@ -95,10 +98,11 @@ def _count(deps: WorkflowDeps, table: str) -> int:
 
 def test_sample_messages_cover_every_intent() -> None:
     assert len(SAMPLES) >= 10
-    assert {sample["intent"] for sample in SAMPLES} == set(INTENTS)
+    assert {sample["intent"] for sample in GRAPH_SAMPLES} == set(INTENTS)
+    assert len(SAMPLES) - len(GRAPH_SAMPLES) >= 2  # emergency samples
 
 
-@pytest.mark.parametrize("sample", SAMPLES, ids=[sample["text"] for sample in SAMPLES])
+@pytest.mark.parametrize("sample", GRAPH_SAMPLES, ids=[sample["text"] for sample in GRAPH_SAMPLES])
 def test_sample_messages_reach_the_expected_node(
     make_deps: MakeDeps, sample: dict[str, str]
 ) -> None:

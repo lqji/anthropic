@@ -14,15 +14,15 @@ curl localhost:8000/health
 
 Interactive API docs: <http://localhost:8000/docs>. No API key? Set `LLM_PROVIDER=fake` for a deterministic demo mode.
 
-A fresh start (`docker compose down -v` first for a clean database) creates the schema, the 4 doctors (2 in each of 2 specialties), their slots for the next 5 days and the clinic documents. No manual step: the app applies `db/` and `seed/` itself.
+A fresh start (`docker compose down -v` first for a clean database) creates the schema, the 4 doctors (2 in each of 2 specialties), their slots for the next 5 days and the 6 clinic documents. No manual step: the app applies `db/` and `seed/` itself.
 
 ### Files
 
 ```text
 db/schema/NN_*.sql     tables and indexes, incl. the append-only audit list (idempotent, applied on every start)
 db/seed/NN_*.sql       demo specialties and doctors (applied once, while there are no doctors)
-seed/clinic_docs/      clinic documents (Markdown), loaded and chunked at start
-seed/sample_messages.json
+seed/clinic_docs/      the 6 clinic documents (Markdown), loaded and chunked at start
+seed/sample_messages.json  sample patient messages for every intent, and emergencies
 src/clinic/            api -> services -> workflows -> repositories; domain; llm; rag
 docs/                  api.md (incl. the audit list), workflow.md, adr/ (decision records)
 scripts/smoke_test.sh  post-deploy check

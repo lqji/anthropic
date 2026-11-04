@@ -11,15 +11,18 @@ heading sections with whole documents, and runs the real `knowledge` node with t
 FakeLLM (no API key) to show the replies. Embeddings are compared on paper only (see
 docs/research/R3-rag.md): they need an external API and a vector store, which the project forbids.
 
-Run it (needs a PostgreSQL, for example the dev database from compose.dev.yaml):
+Run it on a database the app is not using: it loads only these four documents, so on the app's
+database it would remove the others until the app's next start. For example:
 
-    DATABASE_URL=postgresql://clinic:change-me-local-only@localhost:5432/clinic \\
+    DATABASE_URL=postgresql://clinic:change-me-local-only@localhost:5432/rag_demo \\
         uv run python experiments/rag/rag_demo.py
 """
 
 import os
 import re
+import shutil
 import sys
+import tempfile
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -41,6 +44,9 @@ from clinic.workflows.nodes.knowledge import make_knowledge
 from clinic.workflows.state import new_turn
 
 DOCS_DIR = Path(__file__).resolve().parents[2] / "seed" / "clinic_docs"
+# The four documents R3 was written about. seed/clinic_docs has more since CFD-34; the experiment
+# keeps to these four, so its output and the numbers in R3 stay what was measured.
+DOCUMENTS = ("cancellation-policy.md", "insurance.md", "opening-hours.md", "visit-preparation.md")
 MIN_SCORE = 0.30  # the service's defaults (RAG_MIN_SCORE, RAG_TOP_K in .env.example)
 TOP_K = 3
 SCORES = (0.1, 0.3, 0.5, 0.7, 0.9)  # min_score values tried in steps 2 and 3
@@ -149,7 +155,12 @@ def run(database_url: str) -> list[str]:
     seen: list[str] = []
     with psycopg.connect(database_url, connect_timeout=10) as conn:  # every external call: timeout
         apply_schema(conn)  # the app's own tables (db/schema), as at startup
-        KnowledgeLoader(DOCS_DIR).load(conn)  # the real loader: heading sections, max 200 words
+        with tempfile.TemporaryDirectory() as docs:  # only the four documents, see DOCUMENTS
+            for name in DOCUMENTS:
+                shutil.copy(DOCS_DIR / name, docs)
+            KnowledgeLoader(Path(docs)).load(
+                conn
+            )  # the real loader: heading sections, max 200 words
         conn.commit()
         sections = load_sections(conn)
 

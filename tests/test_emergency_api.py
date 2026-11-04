@@ -1,8 +1,10 @@
+import json
 import logging
 import threading
 import time
 from collections.abc import Callable, Iterator
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -22,6 +24,10 @@ from tests.test_conversation_api import FakeWorkflow
 
 EMERGENCY_NUMBER = "1234"  # not the default, so the reply must come from settings
 CHEST_PAIN = "I have crushing chest pain"
+SAMPLES = Path(__file__).resolve().parents[1] / "seed" / "sample_messages.json"
+EMERGENCY_SAMPLES = [
+    sample for sample in json.loads(SAMPLES.read_text()) if sample["intent"] == "emergency"
+]
 
 
 @pytest.fixture
@@ -84,6 +90,24 @@ def test_emergency_is_listed_for_staff_with_rule_and_excerpt(client: TestClient)
     assert flag["matched_rule"] == "chest_pain"
     assert flag["excerpt"] == CHEST_PAIN
     assert flag["status"] == "open"
+
+
+@pytest.mark.parametrize(
+    "sample", EMERGENCY_SAMPLES, ids=[sample["text"] for sample in EMERGENCY_SAMPLES]
+)
+def test_emergency_sample_messages_get_the_emergency_outcome(
+    client: TestClient, workflow: FakeWorkflow, sample: dict[str, str]
+) -> None:
+    conversation_id = _start(client)
+
+    response = client.post(_url(conversation_id), json={"text": sample["text"]})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert (body["intent"], body["outcome"]) == (sample["intent"], sample["outcome"])
+    assert workflow.calls == []  # no workflow, so no model call
+    [flag] = client.get("/api/v1/emergencies", params={"status": "open"}).json()
+    assert flag["matched_rule"] == sample["rule"]
 
 
 def test_long_emergency_message_excerpt_is_200_chars(client: TestClient) -> None:
