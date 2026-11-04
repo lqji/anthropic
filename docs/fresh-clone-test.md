@@ -57,15 +57,15 @@ than a first build on a new machine.
    checkout) uses the same containers and the same database volume, so a "fresh" start would
    have reused the old database. The README did not say this. **Fix:** a README line under "Run
    it": stop the other checkout first.
-3. **HTTP 503 for the first requests after a database restart (not fixed here).** After
+3. **HTTP 503 for the first requests after a database restart (fixed after this test, see #61).** After
    `docker compose restart db`, 2 requests got `503 database_unavailable` before the 3rd
    succeeded. The next smoke test then failed once in the chat step, because the workflow's
    checkpoint pool still held its own closed connection. The api log shows `psycopg.pool:
    discarding closed connection` and `AdminShutdown`. The pools in `db.make_pool` and
    `db.make_checkpoint_pool` hand out each dead connection once and drop it only after a request
    fails on it. Nothing is lost and it clears by itself, but a patient's message can fail right
-   after a database restart. This is a code change, outside a fresh-clone test, so it is left to
-   a follow-up issue (for example, checking connections before they are handed out).
+   after a database restart. This is a code change, outside a fresh-clone test, so it was left to
+   a follow-up: #61 makes both pools check a connection before handing it out.
 4. **`/health` reports version `0.1.0`** on the `v0.1.1` branch. Expected until the release
    bumps `src/clinic/__init__.py`; worth checking after the release.
 

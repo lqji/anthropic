@@ -17,6 +17,11 @@ STATEMENT_TIMEOUT_MS = 5000
 SETUP_STATEMENT_TIMEOUT_MS = 300_000
 
 
+# Each checkout first runs a trivial query (one extra round trip), so a connection that died while
+# idle, e.g. after a database restart, is replaced instead of failing the request that got it.
+_CHECK = ConnectionPool.check_connection
+
+
 def make_pool(settings: Settings) -> ConnectionPool:
     """Build an explicitly sized pool. The caller opens and closes it."""
     return ConnectionPool(
@@ -24,6 +29,7 @@ def make_pool(settings: Settings) -> ConnectionPool:
         min_size=2,
         max_size=settings.db_pool_max_size,
         timeout=settings.db_pool_timeout_s,
+        check=_CHECK,
         kwargs={
             "connect_timeout": CONNECT_TIMEOUT_S,
             "options": f"-c statement_timeout={STATEMENT_TIMEOUT_MS}",
@@ -43,6 +49,7 @@ def make_checkpoint_pool(settings: Settings) -> ConnectionPool[Connection[DictRo
         min_size=1,
         max_size=settings.db_pool_max_size,
         timeout=settings.db_pool_timeout_s,
+        check=_CHECK,
         kwargs={
             "autocommit": True,
             "prepare_threshold": 0,

@@ -2,13 +2,16 @@ import threading
 from collections.abc import Callable
 from datetime import UTC, datetime
 
+import psycopg
 import pytest
+from psycopg_pool import ConnectionPool
 
 from clinic.clock import FixedClock, SystemClock
 from clinic.config import Settings
-from clinic.db import make_pool, ping
+from clinic.db import make_checkpoint_pool, make_pool, ping
 from clinic.errors import ConversationBusy
 from clinic.locks import ConversationLocks
+from tests.conftest import temporary_database
 
 
 def test_fixed_clock_returns_the_same_instant_until_set() -> None:
@@ -83,3 +86,32 @@ def test_ping_true_for_real_database(
         assert ping(pool) is True
     finally:
         pool.close(timeout=2)
+
+
+def _kill_other_backends(database_url: str) -> None:
+    """Close every other connection to this database, as a database restart does."""
+    with psycopg.connect(database_url, autocommit=True) as admin:
+        admin.execute(
+            "SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
+            "WHERE datname = current_database() AND pid <> pg_backend_pid()"
+        )
+
+
+@pytest.mark.parametrize("factory", [make_pool, make_checkpoint_pool])
+def test_pool_replaces_connections_killed_while_idle(
+    factory: Callable[[Settings], ConnectionPool],
+    make_settings: Callable[..., Settings],
+    database_url: str,
+) -> None:
+    # A throwaway database, so killing its backends cannot hit any other test.
+    with temporary_database(database_url) as url:
+        pool = factory(make_settings(database_url=url))
+        pool.open(wait=True, timeout=5)
+        try:
+            _kill_other_backends(url)
+            # Every idle connection is dead now. Without a check, the first checkouts would raise.
+            for _ in range(4):
+                with pool.connection() as conn:
+                    assert conn.execute("SELECT 1").fetchone() is not None
+        finally:
+            pool.close(timeout=2)
