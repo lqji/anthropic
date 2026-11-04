@@ -17,7 +17,9 @@ SEED_DIR = Path(__file__).resolve().parents[1] / "seed" / "clinic_docs"
 SEED_NAMES = [
     "cancellation-policy.md",
     "insurance.md",
+    "new-patients.md",
     "opening-hours.md",
+    "payment-and-fees.md",
     "visit-preparation.md",
 ]
 

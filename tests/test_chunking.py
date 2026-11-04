@@ -99,7 +99,9 @@ def test_seed_documents_chunk_cleanly() -> None:
     assert [f.name for f in files] == [
         "cancellation-policy.md",
         "insurance.md",
+        "new-patients.md",
         "opening-hours.md",
+        "payment-and-fees.md",
         "visit-preparation.md",
     ]
     for path in files:

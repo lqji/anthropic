@@ -2,8 +2,10 @@
 
 Which way of finding clinic text answers the R3 question best: find the right document for a
 clinic question, and find nothing for a question the documents do not cover? It uses the four
-clinic documents in `seed/clinic_docs/`, the service's own loader and retriever, and the project's
-`FakeLLM` (no API key, no external call).
+clinic documents R3 was written about (`DOCUMENTS` in `rag_demo.py`, from `seed/clinic_docs/`),
+the service's own loader and retriever, and the project's `FakeLLM` (no API key, no external
+call). `seed/clinic_docs/` has six documents since CFD-34; the experiment keeps to the four, so
+its output and the numbers in the R3 note stay what was measured.
 
 Two options search the same 15 chunks:
 
@@ -17,19 +19,22 @@ paper.
 
 ## Run
 
-It needs a PostgreSQL. The dev database works (`docker compose -f compose.yaml -f compose.dev.yaml
-up -d db`):
+It needs a PostgreSQL database that the app is not using. With the dev database container up
+(`docker compose -f compose.yaml -f compose.dev.yaml up -d db`), create a separate database for
+it:
 
 ```bash
-DATABASE_URL=postgresql://clinic:change-me-local-only@localhost:5432/clinic \
+docker compose -f compose.yaml -f compose.dev.yaml exec db createdb -U clinic rag_demo
+DATABASE_URL=postgresql://clinic:change-me-local-only@localhost:5432/rag_demo \
   uv run python experiments/rag/rag_demo.py
 ```
 
-It creates the app's tables with `apply_schema` and loads the documents with `KnowledgeLoader`,
-as the service does at startup. Both are idempotent, so it can run again on the same database
-(and on the dev database of a running app, where it changes nothing). Its output is the same on
-every run. `tests/test_rag_experiment.py` runs it in CI against a fresh database, so it cannot go
-stale.
+It creates the app's tables with `apply_schema` and loads the four documents with
+`KnowledgeLoader`, as the service does at startup. Both are idempotent, so it can run again on the
+same database, and its output is the same on every run. Do not point it at the app's own
+database: the loader keeps only the documents it is given, so the app's other documents would be
+removed until its next start. `tests/test_rag_experiment.py` runs it in CI against a fresh
+database, so it cannot go stale.
 
 ## What the experiment prints
 
