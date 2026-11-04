@@ -16,6 +16,8 @@ Interactive API docs: <http://localhost:8000/docs>. No API key? Set `LLM_PROVIDE
 
 A fresh start (`docker compose down -v` first for a clean database) creates the schema, the 4 doctors (2 in each of 2 specialties), their slots for the next 5 days and the 6 clinic documents. No manual step: the app applies `db/` and `seed/` itself.
 
+One copy per Docker engine: the compose project is named `clinic-front-desk`, so a second checkout on the same machine takes over the same containers and the same database volume. Run `docker compose down` in the other checkout first.
+
 ### Files
 
 ```text
