@@ -95,7 +95,8 @@ def test_specialty_works_too(find_slots: Node) -> None:
 
     assert update["outcome"] == "slots_listed"
     assert "in General Practice" in str(update["reply"])
-    assert {slot["doctor"] for slot in _offered(update)} == {"Dr. Khalid Rahman"}
+    doctors = {slot["doctor"] for slot in _offered(update)}
+    assert doctors == {"Dr. Khalid Rahman", "Dr. Yusuf Mansoor"}  # both General Practice doctors
 
 
 @pytest.mark.parametrize("date", [None, "2026-11-01", "not a date"])

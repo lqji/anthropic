@@ -49,16 +49,22 @@ def test_doctors_of_a_specialty(client: TestClient) -> None:
     response = client.get("/api/v1/doctors", params={"specialty": "Dermatology"})
 
     assert response.status_code == 200
-    assert [d["name"] for d in response.json()] == ["Dr. Salma Nasser"]
-    assert response.json()[0] == {"id": 1, "name": "Dr. Salma Nasser", "specialty": "Dermatology"}
+    assert [d["name"] for d in response.json()] == ["Dr. Layla Hassan", "Dr. Salma Nasser"]
+    assert {"id": 1, "name": "Dr. Salma Nasser", "specialty": "Dermatology"} in response.json()
+    assert {d["specialty"] for d in response.json()} == {"Dermatology"}
 
 
 def test_doctors_filter_ignores_case_and_lists_all_without_it(client: TestClient) -> None:
     lower = client.get("/api/v1/doctors", params={"specialty": "dermatology"}).json()
     every = client.get("/api/v1/doctors").json()
 
-    assert [d["name"] for d in lower] == ["Dr. Salma Nasser"]
-    assert [d["name"] for d in every] == ["Dr. Khalid Rahman", "Dr. Salma Nasser"]
+    assert [d["name"] for d in lower] == ["Dr. Layla Hassan", "Dr. Salma Nasser"]
+    assert [d["name"] for d in every] == [
+        "Dr. Khalid Rahman",
+        "Dr. Layla Hassan",
+        "Dr. Salma Nasser",
+        "Dr. Yusuf Mansoor",
+    ]
 
 
 def test_doctors_of_an_unknown_specialty_is_404(client: TestClient) -> None:
@@ -101,8 +107,8 @@ def test_slots_today_leave_out_slots_that_already_started(client: TestClient) ->
 def test_slots_by_specialty(client: TestClient) -> None:
     slots = _slots(client, specialty="General Practice", date=TOMORROW)
 
-    assert {s["doctor"] for s in slots} == {"Dr. Khalid Rahman"}
-    assert len(slots) == 18
+    assert {s["doctor"] for s in slots} == {"Dr. Khalid Rahman", "Dr. Yusuf Mansoor"}
+    assert len(slots) == 36  # 2 doctors x 18 slots
 
 
 @pytest.mark.parametrize(
