@@ -5,6 +5,7 @@ import threading
 import time
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
+from pathlib import Path
 from uuid import uuid4
 
 import psycopg
@@ -264,7 +265,7 @@ def test_only_an_unreachable_database_counts_as_unreachable(
 def test_a_timed_out_migration_stops_startup_instead_of_being_retried(
     settings: Settings, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
-    def slow_schema(conn: psycopg.Connection[TupleRow]) -> None:
+    def slow_schema(conn: psycopg.Connection[TupleRow], db_dir: Path) -> None:
         conn.execute("SET statement_timeout = 10")
         conn.execute("SELECT pg_sleep(1)")
 
@@ -282,7 +283,7 @@ def test_setup_connections_use_the_long_statement_timeout(
 ) -> None:
     timeouts: dict[str, object] = {}
 
-    def schema_spy(conn: psycopg.Connection[TupleRow]) -> None:
+    def schema_spy(conn: psycopg.Connection[TupleRow], db_dir: Path) -> None:
         row = conn.execute("SHOW statement_timeout").fetchone()
         timeouts["schema"] = None if row is None else row[0]
 

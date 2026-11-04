@@ -1,4 +1,4 @@
-"""SQL for the `approvals` table (schema in sql/03_approvals.sql)."""
+"""SQL for the `approvals` table (schema in db/schema/03_approvals.sql)."""
 
 from dataclasses import dataclass
 from datetime import datetime

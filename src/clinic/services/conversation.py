@@ -17,7 +17,7 @@ from clinic.services.turn import TurnResult
 
 logger = logging.getLogger("clinic.conversation")
 
-# Must match the CHECK constraint on conversations.status (sql/01_conversations.sql).
+# Must match the CHECK constraint on conversations.status (db/schema/01_conversations.sql).
 CONVERSATION_STATUSES = frozenset({"active", "awaiting_approval", "closed"})
 
 STILL_WAITING = (

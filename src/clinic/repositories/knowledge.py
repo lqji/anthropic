@@ -1,4 +1,4 @@
-"""SQL for the `documents` and `doc_chunks` tables (schema in sql/04_knowledge.sql)."""
+"""SQL for the `documents` and `doc_chunks` tables (schema in db/schema/04_knowledge.sql)."""
 
 from collections.abc import Sequence
 

@@ -1,4 +1,4 @@
-"""SQL for the `conversations` table (schema in sql/01_conversations.sql)."""
+"""SQL for the `conversations` table (schema in db/schema/01_conversations.sql)."""
 
 from dataclasses import dataclass
 from datetime import datetime

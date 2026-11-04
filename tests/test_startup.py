@@ -18,16 +18,21 @@ from clinic.app import create_app
 from clinic.clock import SystemClock
 from clinic.config import Settings
 from clinic.rag.loader import KnowledgeLoader, LoadReport
-from clinic.schema import apply_schema, schema_files
+from clinic.schema import DEFAULT_DB_DIR, apply_schema, sql_files
 from tests.conftest import temporary_database
 
 SEED_DIR = Path(__file__).resolve().parents[1] / "seed" / "clinic_docs"
 
 
-def test_schema_files_are_packaged_in_order() -> None:
-    names = schema_files()
+def test_schema_files_are_in_order() -> None:
+    names = [path.name for path in sql_files(DEFAULT_DB_DIR, "schema")]
     assert "04_knowledge.sql" in names
     assert names == sorted(names)
+
+
+def test_a_missing_db_folder_stops_startup_with_a_clear_message(tmp_path: Path) -> None:
+    with pytest.raises(FileNotFoundError, match="DB_DIR"):
+        sql_files(tmp_path, "schema")
 
 
 def test_apply_schema_twice_is_harmless(database_url: str) -> None:
@@ -79,12 +84,12 @@ def test_database_back_after_failed_start_is_prepared_by_retry(
         conn.execute("DROP TABLE IF EXISTS doc_chunks, documents")
     calls = 0
 
-    def down_once(conn: Connection[TupleRow]) -> None:
+    def down_once(conn: Connection[TupleRow], db_dir: Path) -> None:
         nonlocal calls
         calls += 1
         if calls == 1:
             raise psycopg.OperationalError("database is starting up")
-        apply_schema(conn)
+        apply_schema(conn, db_dir)
 
     monkeypatch.setattr(app_module, "apply_schema", down_once)
     monkeypatch.setattr(app_module, "PREPARE_RETRY_S", 0.05)
@@ -115,7 +120,7 @@ def test_retry_that_hits_another_error_logs_it_and_stops(
 ) -> None:
     calls = 0
 
-    def down_then_broken(conn: Connection[TupleRow]) -> None:
+    def down_then_broken(conn: Connection[TupleRow], db_dir: Path) -> None:
         nonlocal calls
         calls += 1
         if calls == 1:
@@ -179,9 +184,9 @@ def test_prepare_database_loads_documents_after_the_schema(
     real_apply_schema = apply_schema
     real_load = KnowledgeLoader.load
 
-    def recording_apply_schema(conn: Connection[TupleRow]) -> None:
+    def recording_apply_schema(conn: Connection[TupleRow], db_dir: Path) -> None:
         order.append("schema")
-        real_apply_schema(conn)
+        real_apply_schema(conn, db_dir)
 
     def recording_load(self: KnowledgeLoader, conn: Connection[TupleRow]) -> LoadReport:
         order.append("documents")

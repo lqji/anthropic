@@ -14,6 +14,21 @@ curl localhost:8000/health
 
 Interactive API docs: <http://localhost:8000/docs>. No API key? Set `LLM_PROVIDER=fake` for a deterministic demo mode.
 
+A fresh start (`docker compose down -v` first for a clean database) creates the schema, the 2 doctors, their slots for the next 5 days and the clinic documents. No manual step: the app applies `db/` and `seed/` itself.
+
+### Files
+
+```text
+db/schema/NN_*.sql     tables and indexes (idempotent, applied on every start)
+db/seed/NN_*.sql       demo specialties and doctors (applied once, while there are no doctors)
+seed/clinic_docs/      clinic documents (Markdown), loaded and chunked at start
+seed/sample_messages.json
+src/clinic/            api -> services -> workflows -> repositories; domain; llm; rag
+docs/                  api.md, workflow.md, adr/ (decision records)
+scripts/smoke_test.sh  post-deploy check
+tests/                 pytest (real PostgreSQL, FakeLLM)
+```
+
 ## Develop and test
 
 ```bash
@@ -66,6 +81,7 @@ All settings are environment variables; the service refuses to start and names e
 | `INTENT_MIN_CONFIDENCE` | `0.6` | Below this the assistant asks what the patient needs. |
 | `RAG_MIN_SCORE`, `RAG_TOP_K` | `0.30`, `3` | Minimum score and number of document sections used to answer. |
 | `CLINIC_DOCS_DIR` | `seed/clinic_docs` | Markdown documents loaded at startup. |
+| `DB_DIR` | `db` | Folder with `schema/` and `seed/` SQL applied at startup. |
 | `LANGGRAPH_STRICT_MSGPACK` | `true` | Keep `true`: checkpoints may only hold plain data. |
 | `APP_VERSION` | `dev` | Names the image (`clinic-api:<version>`); pass it on the command line, not in `.env`. `/health` reports the version of the code (`src/clinic/__init__.py`) whatever this says, so it cannot disagree with what is running. |
 
@@ -211,6 +227,6 @@ The full list for each release is in [CHANGELOG.md](CHANGELOG.md).
 - A pending approval never expires.
 - While a conversation waits for approval, every non-emergency message gets "still waiting".
 - English only.
-- Demo slots are seeded once, on the first start, for 5 days from that day (2 doctors, 30-minute
+- The schema (`db/schema/`) and the demo doctors (`db/seed/`) are plain SQL, applied by the app at startup; see [ADR 0001](docs/adr/0001-schema-and-seed-under-db.md). Demo slots are seeded once, on the first start, for 5 days from that day (2 doctors, 30-minute
   slots 09:00-13:00 and 14:00-19:00). They do not roll forward: after 5 days there are no future
   slots until the database is reset with `docker compose down -v`.
