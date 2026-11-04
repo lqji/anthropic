@@ -9,10 +9,14 @@ and no database:
 `InMemorySaver` is allowed here and nowhere else: it forgets everything when the process ends.
 The real service uses `PostgresSaver` (see docs/adr/approval-design.md).
 
+Not copied from the real flow: the service runs `is_emergency()` before it calls the model, and
+this demo does not. Do not use this graph as a template for a patient-facing entry point.
+
 Run it:  uv run python experiments/hitl/hitl_demo.py
 """
 
 import datetime as dt
+from collections.abc import Callable
 from typing import TypedDict
 
 from langchain_core.runnables import RunnableConfig
@@ -23,7 +27,7 @@ from langgraph.graph.state import CompiledStateGraph
 from langgraph.types import Command, interrupt
 
 from clinic.llm.fake import FakeLLM
-from clinic.llm.port import ClassifyContext
+from clinic.llm.port import ClassifyContext, LLMPort
 
 # Every time `ask_staff` starts, one line is added. It proves what happens on resume.
 EVENTS: list[str] = []
@@ -37,9 +41,14 @@ class State(TypedDict, total=False):
     reply: str
 
 
-def classify(state: State) -> State:
-    result = FakeLLM().classify(state["text"], ClassifyContext(today=dt.date(2026, 11, 4)))
-    return {"intent": result.intent}
+def make_classify(llm: LLMPort) -> Callable[[State], State]:
+    """The classify node. Like the real graph, it reaches the model only through `LLMPort`."""
+
+    def classify(state: State) -> State:
+        result = llm.classify(state["text"], ClassifyContext(today=dt.date(2026, 11, 4)))
+        return {"intent": result.intent}
+
+    return classify
 
 
 def route(state: State) -> str:
@@ -67,9 +76,9 @@ def answer(state: State) -> State:
 Graph = CompiledStateGraph[State, None, State, State]
 
 
-def build(saver: BaseCheckpointSaver[str]) -> Graph:
+def build(saver: BaseCheckpointSaver[str], llm: LLMPort) -> Graph:
     builder = StateGraph(State)
-    builder.add_node("classify", classify)
+    builder.add_node("classify", make_classify(llm))
     builder.add_node("ask_staff", ask_staff)
     builder.add_node("apply", apply)
     builder.add_node("answer", answer)
@@ -90,7 +99,8 @@ def run() -> list[str]:
     """Run the whole experiment and return what it observed, one line per fact."""
     EVENTS.clear()
     saver = InMemorySaver()
-    graph = build(saver)
+    llm = FakeLLM()
+    graph = build(saver, llm)
     seen: list[str] = []
 
     # 1. A cancel message pauses the graph. The call returns instead of waiting.
@@ -106,7 +116,7 @@ def run() -> list[str]:
 
     # 3. A new graph object on the same saver continues the paused thread. This is the shape of
     #    a restart; only a database-backed saver survives a real one.
-    revived = build(saver)
+    revived = build(saver, llm)
     seen.append(f"3. a new graph sees the pause: next = {revived.get_state(thread('anna')).next}")
 
     # 4. Resume with the staff decision.

@@ -116,9 +116,11 @@ safe to run twice. This is what ADR `approval-design` records.
 
 ## Agreement with R1 (CFD-32)
 
-Compared with the R1 note (CFD-32, issue #47, PR #53, MrSn001): `docs/research/R1-checkpoints.md`
-and `docs/adr/checkpoint-design.md`. The two notes agree on one checkpoint design. No note and no
-code had to change.
+Compared with the R1 note (CFD-32, issue #47, MrSn001), which is in **PR #53 and not merged yet**:
+`docs/research/R1-checkpoints.md` and `docs/adr/checkpoint-design.md`. Those two files are not on
+this branch, so the links below work once #53 is merged. MrSn001 made the comparison in a comment
+on PR #52 and I checked it against their branch: the two notes agree on one checkpoint design, and
+no note or code had to change.
 
 | Design point | R2 says (and the code) | R1 says |
 |---|---|---|
@@ -131,4 +133,5 @@ code had to change.
 What R1 adds that supports this note: its findings 3 and 4 show that a new connection, saver and
 graph on the same database still have the whole conversation, so the approval pause, which is one
 more checkpoint, survives a restart for the same reason. This note's own experiment cannot show
-that, because it uses `InMemorySaver`.
+that, because it uses `InMemorySaver`. Until #53 is merged, that claim rests on R1's branch
+(`feature/CFD-32-mrsn001-checkpoint-research`), not on this one.
