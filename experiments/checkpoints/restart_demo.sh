@@ -16,13 +16,16 @@ set -euo pipefail
 BASE_URL="${1:-http://localhost:8000}"
 API="${BASE_URL%/}/api/v1"
 
-for tool in curl jq docker; do
+for tool in curl jq docker timeout; do
   command -v "$tool" >/dev/null || { echo "FAIL: $tool is not installed" >&2; exit 1; }
 done
 
+# Every call has a timeout (AGENTS.md): 3 s to connect, 10 s for the whole request.
+CURL=(curl -sS --connect-timeout 3 --max-time 10)
+
 say() { # say <conversation id> <text> -> prints the reply, fails on a non-200 answer
   local body
-  body="$(curl -sS --fail-with-body -X POST "$API/conversations/$1/messages" \
+  body="$("${CURL[@]}" --fail-with-body -X POST "$API/conversations/$1/messages" \
     -H 'Content-Type: application/json' -d "$(jq -cn --arg t "$2" '{text: $t}')")"
   printf '%s' "$body" | jq -r '"  [\(.outcome)] \(.reply)"'
   OUTCOME="$(printf '%s' "$body" | jq -r .outcome)"
@@ -30,7 +33,7 @@ say() { # say <conversation id> <text> -> prints the reply, fails on a non-200 a
 
 wait_healthy() {
   for _ in $(seq 1 60); do
-    if curl -sf "$BASE_URL/health" >/dev/null 2>&1; then return 0; fi
+    if "${CURL[@]}" -f "$BASE_URL/health" >/dev/null 2>&1; then return 0; fi
     sleep 1
   done
   echo "FAIL: the api did not come back within 60 s" >&2
@@ -38,7 +41,7 @@ wait_healthy() {
 }
 
 wait_healthy
-CID="$(curl -sS --fail-with-body -X POST "$API/conversations" -H 'Content-Type: application/json' \
+CID="$("${CURL[@]}" --fail-with-body -X POST "$API/conversations" -H 'Content-Type: application/json' \
   -d '{"patient_ref":"restart-demo"}' | jq -r .id)"
 echo "1. conversation $CID"
 
@@ -48,7 +51,8 @@ say "$CID" "When is Dr. Salma free tomorrow?"
 
 STARTED_BEFORE="$(docker compose ps -q api | xargs docker inspect -f '{{.State.StartedAt}}')"
 echo "3. restarting the api container (docker compose restart api)"
-docker compose restart api >/dev/null 2>&1
+timeout 60 docker compose restart api >/dev/null 2>&1 \
+  || { echo "FAIL: docker compose restart api failed or took over 60 s" >&2; exit 1; }
 wait_healthy
 STARTED_AFTER="$(docker compose ps -q api | xargs docker inspect -f '{{.State.StartedAt}}')"
 [ "$STARTED_BEFORE" != "$STARTED_AFTER" ] || { echo "FAIL: the api did not restart" >&2; exit 1; }
@@ -59,5 +63,5 @@ say "$CID" "book the first one"
 [ "$OUTCOME" = "booked" ] || { echo "FAIL: expected a booking from the list shown before" >&2; exit 1; }
 
 echo "5. the stored conversation:"
-curl -sS "$API/conversations/$CID" | jq -r '.messages[] | "  \(.role): \(.text | split("\n")[0])"'
+"${CURL[@]}" "$API/conversations/$CID" | jq -r '.messages[] | "  \(.role): \(.text | split("\n")[0])"'
 echo "OK: the conversation continued after the restart"

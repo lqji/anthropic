@@ -20,9 +20,11 @@ in the process. PostgreSQL is the project's only database.
    graph with `thread_id` = the conversation id. The conversation row and its checkpoints share
    that key.
 3. **The saver has its own pool.** `db.make_checkpoint_pool` opens autocommit connections with
-   dict rows and `prepare_threshold=0`, which the saver needs, and the 5-second request statement
-   timeout. It is separate from the app pool, so repositories keep one transaction per
-   connection block.
+   dict rows, which the saver needs, and the 5-second request statement timeout. It is separate
+   from the app pool, so repositories keep one transaction per connection block. The pool also
+   sets `prepare_threshold=0`; in psycopg that prepares every statement, although the pool's
+   docstring says "no prepared statements". The saver works either way; the mismatch is left to
+   the follow-up issue #56.
 4. **Tables are created on every start.** `setup_checkpointer` (`workflows/checkpointer.py`) runs
    `PostgresSaver.setup()` on its own autocommit connection (its migrations create indexes
    concurrently) with the 5-minute setup statement timeout. It is idempotent. If the database is
