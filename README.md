@@ -14,7 +14,7 @@ curl localhost:8000/health
 
 Interactive API docs: <http://localhost:8000/docs>. No API key? Set `LLM_PROVIDER=fake` for a deterministic demo mode.
 
-A fresh start (`docker compose down -v` first for a clean database) creates the schema, the 2 doctors, their slots for the next 5 days and the clinic documents. No manual step: the app applies `db/` and `seed/` itself.
+A fresh start (`docker compose down -v` first for a clean database) creates the schema, the 4 doctors (2 in each of 2 specialties), their slots for the next 5 days and the clinic documents. No manual step: the app applies `db/` and `seed/` itself.
 
 ### Files
 
@@ -227,6 +227,6 @@ The full list for each release is in [CHANGELOG.md](CHANGELOG.md).
 - A pending approval never expires.
 - While a conversation waits for approval, every non-emergency message gets "still waiting".
 - English only.
-- The schema (`db/schema/`) and the demo doctors (`db/seed/`) are plain SQL, applied by the app at startup; see [ADR 0001](docs/adr/0001-schema-and-seed-under-db.md). Demo slots are seeded once, on the first start, for 5 days from that day (2 doctors, 30-minute
+- The schema (`db/schema/`) and the demo doctors (`db/seed/`) are plain SQL, applied by the app at startup; see [ADR 0001](docs/adr/0001-schema-and-seed-under-db.md). Demo slots are seeded once, on the first start, for 5 days from that day (4 doctors, 30-minute
   slots 09:00-13:00 and 14:00-19:00). They do not roll forward: after 5 days there are no future
   slots until the database is reset with `docker compose down -v`.

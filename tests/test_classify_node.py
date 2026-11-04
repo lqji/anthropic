@@ -31,7 +31,7 @@ from tests.conftest import temporary_database
 
 NOW = datetime(2026, 11, 2, 8, 0, tzinfo=UTC)  # Monday 12:00 at the clinic (UTC+4)
 SAMPLES = json.loads((Path(__file__).parent.parent / "seed" / "sample_messages.json").read_text())
-DOCTORS = ("Dr. Khalid Rahman", "Dr. Salma Nasser")
+DOCTORS = ("Dr. Khalid Rahman", "Dr. Layla Hassan", "Dr. Salma Nasser", "Dr. Yusuf Mansoor")
 SPECIALTIES = ("Dermatology", "General Practice")
 
 MakeDeps = Callable[..., WorkflowDeps]

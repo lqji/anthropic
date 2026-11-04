@@ -15,7 +15,7 @@ and the runbook says a normal deploy keeps that volume.
 ## Decision
 
 - `db/schema/NN_*.sql` is the schema, moved unchanged from `src/clinic/sql/` (same files, same
-  order). `db/seed/NN_*.sql` is the demo catalogue (2 specialties, 2 doctors).
+  order). `db/seed/NN_*.sql` is the demo catalogue (2 specialties, 4 doctors).
 - The app applies both on start, as it applied the schema before. The image copies `db/` to
   `/app/db`; `DB_DIR` (default `db`, relative to the working directory like `CLINIC_DOCS_DIR`)
   points at it. A missing folder stops startup with a message that names `DB_DIR`.
