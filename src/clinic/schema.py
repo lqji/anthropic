@@ -1,18 +1,25 @@
-from importlib.resources import files
+from pathlib import Path
+from typing import Final
 
 from psycopg import Connection
 from psycopg.rows import TupleRow
 
-
-def schema_files() -> list[str]:
-    """Names of the packaged schema files (src/clinic/sql/NN_*.sql) in the order they run."""
-    return sorted(
-        f.name for f in files("clinic").joinpath("sql").iterdir() if f.name.endswith(".sql")
-    )
+# Relative to the working directory, like CLINIC_DOCS_DIR (the image copies db/ to /app/db).
+DEFAULT_DB_DIR: Final = Path("db")
 
 
-def apply_schema(conn: Connection[TupleRow]) -> None:
-    """Run every schema file in order. Each file is idempotent, so this runs on every start."""
-    sql_dir = files("clinic").joinpath("sql")
-    for name in schema_files():
-        conn.execute(sql_dir.joinpath(name).read_text(encoding="utf-8"))
+def sql_files(db_dir: Path, kind: str) -> list[Path]:
+    """The `db/<kind>/NN_*.sql` files in the order they run. `kind` is "schema" or "seed".
+
+    A missing folder is an error, not an empty list: a wrong DB_DIR must stop the start.
+    """
+    folder = db_dir / kind
+    if not folder.is_dir():
+        raise FileNotFoundError(f"{folder} does not exist (set DB_DIR to the folder holding db/)")
+    return sorted(folder.glob("*.sql"))
+
+
+def apply_schema(conn: Connection[TupleRow], db_dir: Path = DEFAULT_DB_DIR) -> None:
+    """Run every db/schema file in order. Each file is idempotent, so this runs on every start."""
+    for path in sql_files(db_dir, "schema"):
+        conn.execute(path.read_text(encoding="utf-8"))

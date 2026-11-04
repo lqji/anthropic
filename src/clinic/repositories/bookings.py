@@ -1,4 +1,4 @@
-"""SQL for bookings (schema in sql/02_appointments.sql). Double booking is impossible in SQL.
+"""SQL for bookings (schema in db/schema/02_appointments.sql). Double booking is impossible in SQL.
 
 A slot is taken by one statement: a conditional UPDATE that only changes a `free` slot, and the
 booking INSERT on the row it returned (`book_slot` books it, `hold_same_day` holds it for
@@ -18,9 +18,9 @@ import psycopg
 from psycopg import Connection
 from psycopg.rows import TupleRow
 
-# Name of the partial unique index in sql/02_appointments.sql.
+# Name of the partial unique index in db/schema/02_appointments.sql.
 ONE_ACTIVE_BOOKING_PER_SLOT: Final = "bookings_one_active_per_slot"
-# `approvals.kind` of a same-day booking (sql/03_approvals.sql).
+# `approvals.kind` of a same-day booking (db/schema/03_approvals.sql).
 SAME_DAY_BOOKING: Final = "same_day_booking"
 
 

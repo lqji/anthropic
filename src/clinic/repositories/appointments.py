@@ -1,4 +1,4 @@
-"""SQL for specialties, doctors and slots (schema in sql/02_appointments.sql).
+"""SQL for specialties, doctors and slots (schema in db/schema/02_appointments.sql).
 
 Time-dependent statements take `now` from the injected Clock, never SQL `now()`.
 """
@@ -150,37 +150,26 @@ def first_free_slot_start(
     return None if row is None else row[0]
 
 
-def seed_if_empty(
-    conn: Connection[TupleRow],
-    specialties: Sequence[tuple[int, str]],
-    doctors: Sequence[tuple[int, str, int]],
-    slots: Sequence[tuple[int, datetime, datetime]],
-) -> bool:
-    """Insert the catalogue and slots if there are no doctors yet. True if it seeded.
+def has_doctors(conn: Connection[TupleRow]) -> bool:
+    """True once the catalogue has been seeded."""
+    row = conn.execute("SELECT EXISTS (SELECT 1 FROM doctors)").fetchone()
+    return row is not None and bool(row[0])
 
-    Runs in one transaction, so a failed seed leaves nothing behind and is retried next start.
-    """
-    with conn.transaction():
-        row = conn.execute("SELECT EXISTS (SELECT 1 FROM doctors)").fetchone()
-        if row is not None and row[0]:
-            return False
-        with conn.cursor() as cur:
-            cur.executemany(
-                "INSERT INTO specialties (id, name) VALUES (%s, %s) ON CONFLICT DO NOTHING",
-                specialties,
-            )
-            cur.executemany(
-                """
-                INSERT INTO doctors (id, name, specialty_id) VALUES (%s, %s, %s)
-                ON CONFLICT DO NOTHING
-                """,
-                doctors,
-            )
-            cur.executemany(
-                """
-                INSERT INTO slots (doctor_id, starts_at, ends_at) VALUES (%s, %s, %s)
-                ON CONFLICT (doctor_id, starts_at) DO NOTHING
-                """,
-                slots,
-            )
-    return True
+
+def doctor_ids(conn: Connection[TupleRow]) -> list[int]:
+    """Every doctor id, lowest first."""
+    return [row[0] for row in conn.execute("SELECT id FROM doctors ORDER BY id").fetchall()]
+
+
+def insert_slots(
+    conn: Connection[TupleRow], slots: Sequence[tuple[int, datetime, datetime]]
+) -> None:
+    """Insert (doctor_id, starts_at, ends_at) rows; a slot that already exists is left alone."""
+    with conn.cursor() as cur:
+        cur.executemany(
+            """
+            INSERT INTO slots (doctor_id, starts_at, ends_at) VALUES (%s, %s, %s)
+            ON CONFLICT (doctor_id, starts_at) DO NOTHING
+            """,
+            slots,
+        )

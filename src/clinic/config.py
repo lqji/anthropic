@@ -39,6 +39,7 @@ class Settings(BaseSettings):
     rag_min_score: float = Field(default=0.30, ge=0)
     rag_top_k: int = Field(default=3, ge=1)
     clinic_docs_dir: Path = Path("seed/clinic_docs")
+    db_dir: Path = Path("db")
 
     @field_validator("openai_api_key", mode="before")
     @classmethod

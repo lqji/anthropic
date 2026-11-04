@@ -1,4 +1,4 @@
-"""SQL for the `emergencies` table (schema in sql/05_safety.sql)."""
+"""SQL for the `emergencies` table (schema in db/schema/05_safety.sql)."""
 
 from dataclasses import dataclass
 from datetime import datetime
