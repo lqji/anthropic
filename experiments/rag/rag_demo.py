@@ -148,7 +148,7 @@ def run(database_url: str) -> list[str]:
     """Run the whole experiment and return what it observed, one line per fact."""
     seen: list[str] = []
     with psycopg.connect(database_url, connect_timeout=10) as conn:  # every external call: timeout
-        apply_schema(conn)  # the app's own tables (src/clinic/sql), as at startup
+        apply_schema(conn)  # the app's own tables (db/schema), as at startup
         KnowledgeLoader(DOCS_DIR).load(conn)  # the real loader: heading sections, max 200 words
         conn.commit()
         sections = load_sections(conn)

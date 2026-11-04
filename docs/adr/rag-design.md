@@ -20,9 +20,10 @@ key, so retrieval has to work and be tested without one.
    and splits a section over 200 words between paragraphs. Each chunk keeps its heading. The rule
    version is part of each file's fingerprint, so a rule change re-chunks every document.
 3. **Loaded at startup, stored in two tables.** `KnowledgeLoader` (`rag/loader.py`) writes
-   `documents` and `doc_chunks` (`sql/04_knowledge.sql`) through `repositories/knowledge.py`. A
-   changed file has all its chunks replaced in one transaction; a broken or deleted file's document
-   is removed, so the assistant never answers from text the clinic no longer publishes.
+   `documents` and `doc_chunks` (`db/schema/04_knowledge.sql`) through
+   `repositories/knowledge.py`. A changed file has all its chunks replaced in one transaction; a
+   broken or deleted file's document is removed, so the assistant never answers from text the
+   clinic no longer publishes.
 4. **What is searched.** `doc_chunks.tsv` is a stored generated column: heading with weight A, text
    with weight B, English configuration, GIN index. At query time the document's file name is added
    with weight A, so a question that names the document's topic finds its sections.

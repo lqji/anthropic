@@ -143,8 +143,8 @@ what retrieval then does.
 ## What the service does today
 
 - `KnowledgeLoader` (`rag/loader.py`) loads every `*.md` file at startup into `documents` and
-  `doc_chunks` (`sql/04_knowledge.sql`, SQL in `repositories/knowledge.py`), replacing a changed
-  file's chunks in one transaction and removing documents whose file is gone or broken.
+  `doc_chunks` (`db/schema/04_knowledge.sql`, SQL in `repositories/knowledge.py`), replacing a
+  changed file's chunks in one transaction and removing documents whose file is gone or broken.
 - `doc_chunks.tsv` is a stored generated column: the heading with weight A and the text with weight
   B, English configuration, with a GIN index.
 - `retriever.search` turns the question into its English lexemes joined with OR, adds the document's
