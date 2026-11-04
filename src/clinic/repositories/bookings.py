@@ -7,6 +7,10 @@ second re-checks `status = 'free'` after the first commits and changes nothing. 
 unique index `bookings_one_active_per_slot` is the second guard.
 
 Time-dependent statements take `now` from the injected Clock, never SQL `now()`.
+
+Every change that really happens appends one audit row (CFD-30) in the same transaction, so the
+audit list cannot lack a change that committed or show one that rolled back. A replayed call
+that changes nothing writes nothing.
 """
 
 from dataclasses import dataclass
@@ -17,6 +21,8 @@ from uuid import UUID
 import psycopg
 from psycopg import Connection
 from psycopg.rows import TupleRow
+
+from clinic.repositories import audit
 
 # Name of the partial unique index in db/schema/02_appointments.sql.
 ONE_ACTIVE_BOOKING_PER_SLOT: Final = "bookings_one_active_per_slot"
@@ -70,6 +76,17 @@ def book_slot(
                 """,
                 {"slot_id": slot_id, "conversation_id": conversation_id, "now": now},
             ).fetchone()
+            if row is not None:
+                audit.record(
+                    conn,
+                    now=now,
+                    actor_type=audit.PATIENT,
+                    actor=str(conversation_id),
+                    action=audit.BOOKING_CREATED,
+                    outcome="confirmed",
+                    booking_id=row[0],
+                    conversation_id=conversation_id,
+                )
     except psycopg.errors.UniqueViolation as exc:
         if exc.diag.constraint_name != ONE_ACTIVE_BOOKING_PER_SLOT:
             raise
@@ -136,6 +153,17 @@ def hold_same_day(
                     "now": now,
                 },
             ).fetchone()
+            if row is not None:
+                audit.record(
+                    conn,
+                    now=now,
+                    actor_type=audit.PATIENT,
+                    actor=str(conversation_id),
+                    action=audit.SAME_DAY_REQUESTED,
+                    outcome="pending_approval",
+                    booking_id=row[0],
+                    conversation_id=conversation_id,
+                )
     except psycopg.errors.UniqueViolation as exc:
         if exc.diag.constraint_name != ONE_ACTIVE_BOOKING_PER_SLOT:
             raise
@@ -206,13 +234,14 @@ def cancel(conn: Connection[TupleRow], booking_id: int, now: datetime) -> bool:
             """
             UPDATE bookings SET status = 'cancelled', updated_at = %(now)s
             WHERE id = %(id)s AND status = 'confirmed'
-            RETURNING slot_id
+            RETURNING slot_id, conversation_id
             """,
             {"id": booking_id, "now": now},
         ).fetchone()
         if row is None:
             return False
         conn.execute("UPDATE slots SET status = 'free' WHERE id = %s", (row[0],))
+        _audit_by_workflow(conn, now, audit.BOOKING_CANCELLED, "cancelled", booking_id, row[1])
         return True
 
 
@@ -227,13 +256,14 @@ def confirm_held(conn: Connection[TupleRow], booking_id: int, now: datetime) -> 
             """
             UPDATE bookings SET status = 'confirmed', updated_at = %(now)s
             WHERE id = %(id)s AND status = 'pending_approval'
-            RETURNING slot_id
+            RETURNING slot_id, conversation_id
             """,
             {"id": booking_id, "now": now},
         ).fetchone()
         if row is None:
             return False
         conn.execute("UPDATE slots SET status = 'booked' WHERE id = %s", (row[0],))
+        _audit_by_workflow(conn, now, audit.BOOKING_CONFIRMED, "confirmed", booking_id, row[1])
         return True
 
 
@@ -248,11 +278,33 @@ def reject_held(conn: Connection[TupleRow], booking_id: int, now: datetime) -> b
             """
             UPDATE bookings SET status = 'rejected', updated_at = %(now)s
             WHERE id = %(id)s AND status = 'pending_approval'
-            RETURNING slot_id
+            RETURNING slot_id, conversation_id
             """,
             {"id": booking_id, "now": now},
         ).fetchone()
         if row is None:
             return False
         conn.execute("UPDATE slots SET status = 'free' WHERE id = %s", (row[0],))
+        _audit_by_workflow(conn, now, audit.BOOKING_REJECTED, "rejected", booking_id, row[1])
         return True
+
+
+def _audit_by_workflow(
+    conn: Connection[TupleRow],
+    now: datetime,
+    action: str,
+    outcome: str,
+    booking_id: int,
+    conversation_id: UUID,
+) -> None:
+    """The booking change that follows a staff decision. The staff name is on the decision's row."""
+    audit.record(
+        conn,
+        now=now,
+        actor_type=audit.SYSTEM,
+        actor=audit.WORKFLOW,
+        action=action,
+        outcome=outcome,
+        booking_id=booking_id,
+        conversation_id=conversation_id,
+    )

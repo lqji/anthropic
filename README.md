@@ -19,12 +19,12 @@ A fresh start (`docker compose down -v` first for a clean database) creates the 
 ### Files
 
 ```text
-db/schema/NN_*.sql     tables and indexes (idempotent, applied on every start)
+db/schema/NN_*.sql     tables and indexes, incl. the append-only audit list (idempotent, applied on every start)
 db/seed/NN_*.sql       demo specialties and doctors (applied once, while there are no doctors)
 seed/clinic_docs/      clinic documents (Markdown), loaded and chunked at start
 seed/sample_messages.json
 src/clinic/            api -> services -> workflows -> repositories; domain; llm; rag
-docs/                  api.md, workflow.md, adr/ (decision records)
+docs/                  api.md (incl. the audit list), workflow.md, adr/ (decision records)
 scripts/smoke_test.sh  post-deploy check
 tests/                 pytest (real PostgreSQL, FakeLLM)
 ```

@@ -8,7 +8,7 @@ from fastapi import FastAPI
 from langgraph.checkpoint.postgres import PostgresSaver
 
 from clinic import __version__
-from clinic.api import appointments, approvals, conversations, emergencies, health
+from clinic.api import appointments, approvals, audit, conversations, emergencies, health
 from clinic.clock import Clock, SystemClock
 from clinic.config import Settings
 from clinic.db import (
@@ -201,4 +201,5 @@ def create_app(
     app.include_router(conversations.router)
     app.include_router(emergencies.router)
     app.include_router(approvals.router)
+    app.include_router(audit.router)
     return app
