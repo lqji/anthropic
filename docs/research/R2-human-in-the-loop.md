@@ -116,8 +116,16 @@ safe to run twice. This is what ADR `approval-design` records.
 
 ## Agreement with R1 (CFD-32)
 
-To confirm with the R1 owner before this PR is merged. What R2 assumes about checkpoints, so the
-two notes can be compared line by line: one `PostgresSaver` on its own connection pool; one
-`thread_id` equal to the conversation id; the checkpoint is the source of truth for the
-workflow's position; `InMemorySaver` only in `experiments/`. If R1 says anything different, one of
-the two notes changes, not the code.
+Status: **not compared yet.** The R1 note (CFD-32, issue #47, MrSn001) is not on `v0.1.1`, so
+there is nothing to compare against. This PR must not be merged until the last column below is
+filled in with what R1 says. If R1 says anything different, one of the two notes changes, not
+the code.
+
+What R2 assumes about checkpoints, and where the code does it:
+
+| Design point | R2 says (and the code) | R1 (#47) says |
+|---|---|---|
+| Saver | One `PostgresSaver` on its own connection pool (`db.py`, `app.py`) | to fill in |
+| Thread id | `thread_id` is the conversation id (`GraphWorkflow`, `GraphApprovalResumer`) | to fill in |
+| Source of truth | The checkpoint decides where a workflow continues; `conversations.status` is only a copy | to fill in |
+| In-memory saver | `InMemorySaver` only in `experiments/` | to fill in |
