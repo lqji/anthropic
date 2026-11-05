@@ -122,9 +122,11 @@ three identical: the conversation and its messages survive a rollback and a roll
 The runbook worked as written. Three things were unclear or missing, all fixed in the README in
 this PR:
 
-1. **A second copy of the stack on the same host blocks the deploy.** `compose.yaml` fixes the
-   project name (`clinic-front-desk`) and port 8000. The host already ran a development copy, so
-   it had to be stopped first. The README now says so in "Deploy a version".
+1. **Only one copy of the stack can run per Docker engine.** `compose.yaml` fixes the project
+   name (`clinic-front-desk`) and port 8000. A second copy with the same project name takes over
+   the first one's containers and database volume; with another project name it clashes on port
+   8000. The host already ran a development copy, so it had to be stopped first. "Deploy a
+   version" in the README now points to the rule under "Run it".
 2. **The rollback block did not check the version.** The deploy section says `/health` must match
    the tag, but the rollback commands did not include that check, and it is the only proof that
    the old code is running. A `curl` of `/health` is added to the rollback block.

@@ -136,8 +136,8 @@ endpoint can close. On a demo or staging system add it with `RUN_EMERGENCY=1 scr
 image (`clinic-api:0.1.0`), so that two releases can sit side by side for a rollback. `/health`
 reports the version of the code you built (the `APP_VERSION` variable is ignored), so check it after a deploy: it should match the tag.
 
-If another copy of this stack already runs on the host (it would hold port 8000 and the same
-Compose project, `clinic-front-desk`), stop it first with `docker compose stop` in its folder.
+Only one copy of the stack can run per Docker engine (see "One copy per Docker engine" under
+Run it): stop any other copy first.
 
 `--wait` returns only when both services are healthy. The smoke test then walks through every
 feature: health, a clinic question, a question the documents do not cover, a booking, a
