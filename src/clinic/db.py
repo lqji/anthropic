@@ -39,9 +39,12 @@ def make_pool(settings: Settings) -> ConnectionPool:
 
 
 def make_checkpoint_pool(settings: Settings) -> ConnectionPool[Connection[DictRow]]:
-    """Pool for PostgresSaver, which needs autocommit, dict rows and no prepared statements.
+    """Pool for PostgresSaver, with the connection settings LangGraph's own saver uses.
 
-    Kept apart from the app pool so repositories keep their one-block-one-transaction semantics.
+    The saver needs autocommit and dict rows. `prepare_threshold=0` makes psycopg prepare every
+    statement on its first run (it does not turn prepared statements off; `None` would), as
+    `PostgresSaver.from_conn_string` does. Kept apart from the app pool so repositories keep their
+    one-block-one-transaction semantics.
     """
     return ConnectionPool(
         settings.database_url,

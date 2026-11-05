@@ -1,9 +1,11 @@
 import threading
 from collections.abc import Callable
 from datetime import UTC, datetime
+from typing import Any
 
 import psycopg
 import pytest
+from psycopg.rows import dict_row
 from psycopg_pool import ConnectionPool
 
 from clinic.clock import FixedClock, SystemClock
@@ -84,6 +86,43 @@ def test_ping_true_for_real_database(
     pool.open(wait=False)
     try:
         assert ping(pool) is True
+    finally:
+        pool.close(timeout=2)
+
+
+def _prepared_on_server(conn: psycopg.Connection[Any]) -> list[str]:
+    """Statements this connection has prepared on the server (each connection has its own)."""
+    rows = conn.execute("SELECT statement FROM pg_prepared_statements", prepare=False).fetchall()
+    return [row["statement"] if isinstance(row, dict) else row[0] for row in rows]
+
+
+def test_checkpoint_pool_uses_the_saver_connection_settings(
+    make_settings: Callable[..., Settings], database_url: str
+) -> None:
+    pool = make_checkpoint_pool(make_settings(database_url=database_url))
+    pool.open(wait=True, timeout=5)
+    try:
+        with pool.connection() as conn:
+            assert conn.autocommit is True
+            assert conn.row_factory is dict_row
+            assert conn.prepare_threshold == 0
+            # Threshold 0 prepares a statement on its very first run.
+            conn.execute("SELECT %s::int AS n", (1,))
+            assert "SELECT $1::int AS n" in _prepared_on_server(conn)
+    finally:
+        pool.close(timeout=2)
+
+
+def test_app_pool_does_not_prepare_on_the_first_run(
+    make_settings: Callable[..., Settings], database_url: str
+) -> None:
+    pool = make_pool(make_settings(database_url=database_url))
+    pool.open(wait=True, timeout=5)
+    try:
+        with pool.connection() as conn:
+            assert conn.prepare_threshold == 5  # psycopg's default
+            conn.execute("SELECT %s::int AS n", (1,))
+            assert "SELECT $1::int AS n" not in _prepared_on_server(conn)
     finally:
         pool.close(timeout=2)
 
