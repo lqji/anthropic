@@ -109,6 +109,14 @@ run on this host while the first pass's containers still held port 8000 failed t
 API container (`port is already allocated`). The smoke tests still passed, against the old
 container, and `/health` showed the wrong version after the "rollback". Always check `/health`.
 
+### Data check across the rollback
+
+Added after review. On `v0.1.0` I started a conversation (`patient_ref` `rehearsal-keep`), asked
+"How should I prepare for my visit?" and saved `GET /api/v1/conversations/{id}` (863 bytes of
+JSON, keys sorted). I rolled back to `v0.1.0-rc.1` (`/health` said `0.1.0-rc.1`) and fetched it
+again, then went forward (`/health` said `0.1.0`) and fetched it a third time. `cmp` found all
+three identical: the conversation and its messages survive a rollback and a roll-forward.
+
 ## Findings
 
 The runbook worked as written. Three things were unclear or missing, all fixed in the README in
@@ -134,8 +142,8 @@ emergency check was skipped, as the README says it is by default.
   Git, but the VM pass is still to do: run the same three steps there and add its output below.
 - **Same database schema on both tags.** The two tags share one schema, so this does not test the
   README's backup-and-restore path for a release with a different schema.
-- **Data kept across the rollback was not checked** beyond the smoke test passing on the same
-  volume.
+- **Data survival was checked with one conversation only** (see the data check above). Bookings
+  and approvals were not compared.
 - **Build time and downloads were not measured.** The host had built this project before, so its
   cache was probably warm; a fresh host downloads base images and packages for each tag.
 - **Fake model.** With a real OpenAI model, the "booking" and "not in documents" checks can need
