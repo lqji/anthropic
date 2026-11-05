@@ -96,6 +96,19 @@ Smoke test passed: 8 checks against http://localhost:8000 (the emergency check w
 
 Exit code 0.
 
+### Second pass, README commands only
+
+The output above is from the first pass, which used `COMPOSE_PROJECT_NAME=rehearsal` to keep
+away from a development stack on the same host. I repeated all three steps (same clone, 2026-11-05
+about 04:07 UTC) with port 8000 free, the default project name and no extra variables, exactly as
+the README now reads. `/health` reported `0.1.0`, then `0.1.0-rc.1` after the rollback, then
+`0.1.0` again; each smoke test passed 8 of 8 (exit 0).
+
+One mistake between the two passes, kept here because it shows why finding 1 matters: a repeat
+run on this host while the first pass's containers still held port 8000 failed to start the new
+API container (`port is already allocated`). The smoke tests still passed, against the old
+container, and `/health` showed the wrong version after the "rollback". Always check `/health`.
+
 ## Findings
 
 The runbook worked as written. Three things were unclear or missing, all fixed in the README in
