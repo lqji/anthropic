@@ -88,6 +88,17 @@ def test_ping_true_for_real_database(
         pool.close(timeout=2)
 
 
+def test_checkpoint_pool_disables_prepared_statements(
+    make_settings: Callable[..., Settings],
+) -> None:
+    # In psycopg, prepare_threshold=0 prepares every statement; None switches preparing off.
+    pool = make_checkpoint_pool(make_settings())
+    kwargs = pool.kwargs
+    assert isinstance(kwargs, dict)
+    assert kwargs["prepare_threshold"] is None
+    assert kwargs["autocommit"] is True
+
+
 def _kill_other_backends(database_url: str) -> None:
     """Close every other connection to this database, as a database restart does."""
     with psycopg.connect(database_url, autocommit=True) as admin:

@@ -52,7 +52,8 @@ def make_checkpoint_pool(settings: Settings) -> ConnectionPool[Connection[DictRo
         check=_CHECK,
         kwargs={
             "autocommit": True,
-            "prepare_threshold": 0,
+            # None turns server-side prepared statements off; 0 would prepare every statement.
+            "prepare_threshold": None,
             "row_factory": dict_row,
             "connect_timeout": CONNECT_TIMEOUT_S,
             "options": f"-c statement_timeout={STATEMENT_TIMEOUT_MS}",

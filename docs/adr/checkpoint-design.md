@@ -22,9 +22,10 @@ in the process. PostgreSQL is the project's only database.
 3. **The saver has its own pool.** `db.make_checkpoint_pool` opens autocommit connections with
    dict rows, which the saver needs, and the 5-second request statement timeout. It is separate
    from the app pool, so repositories keep one transaction per connection block. The pool also
-   sets `prepare_threshold=0`; in psycopg that prepares every statement, although the pool's
-   docstring says "no prepared statements". The saver works either way; the mismatch is left to
-   the follow-up issue #56.
+   sets `prepare_threshold=None`, which turns server-side prepared statements off (in psycopg,
+   `0` would prepare every statement). The saver works either way; we disable them so the pool
+   also works behind a transaction-mode pooler such as PgBouncer. A test pins the setting
+   (issue #56).
 4. **Tables are created on every start.** `setup_checkpointer` (`workflows/checkpointer.py`) runs
    `PostgresSaver.setup()` on its own autocommit connection (its migrations create indexes
    concurrently) with the 5-minute setup statement timeout. It is idempotent. If the database is
