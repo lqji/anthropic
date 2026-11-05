@@ -136,6 +136,9 @@ endpoint can close. On a demo or staging system add it with `RUN_EMERGENCY=1 scr
 image (`clinic-api:0.1.0`), so that two releases can sit side by side for a rollback. `/health`
 reports the version of the code you built (the `APP_VERSION` variable is ignored), so check it after a deploy: it should match the tag.
 
+If another copy of this stack already runs on the host (it would hold port 8000 and the same
+Compose project, `clinic-front-desk`), stop it first with `docker compose stop` in its folder.
+
 `--wait` returns only when both services are healthy. The smoke test then walks through every
 feature: health, a clinic question, a question the documents do not cover, a booking, a
 cancellation that waits for staff, and (with `RUN_EMERGENCY=1`) an emergency. It prints one `ok` line per check, stops at
@@ -158,6 +161,7 @@ tag may not contain the smoke test, so copy it out of the checkout first and run
 SMOKE="$(mktemp)" && cp scripts/smoke_test.sh "$SMOKE"
 git checkout <previous-tag>
 APP_VERSION=<previous-version> docker compose up --build -d --wait
+curl -s http://localhost:8000/health           # "version" must be the previous version
 bash "$SMOKE"; rm -f "$SMOKE"
 ```
 
@@ -196,8 +200,18 @@ bash "$SMOKE"
 If the restore fails, the script stops before the deploy and `backup-now.sql` is what you go back
 to. Delete both backup files when you no longer need them.
 
-After a rollback the checkout is on the old tag (detached HEAD). To go forward again, run
-`git checkout <tag>` for the release you want and deploy it as above.
+After a rollback the checkout is on the old tag (detached HEAD). To go forward again, check out
+the release you want and deploy it as above. The newer scripts are in that checkout, so the
+smoke test needs no copy:
+
+```bash
+git checkout <tag>                             # for example v0.1.0
+APP_VERSION=<version> docker compose up --build -d --wait
+curl -s http://localhost:8000/health           # "version" must be the release you want
+bash scripts/smoke_test.sh
+```
+
+The rollback was rehearsed once, on Ubuntu under WSL2: see [docs/rollback-rehearsal.md](docs/rollback-rehearsal.md).
 
 ### Cut a release
 
