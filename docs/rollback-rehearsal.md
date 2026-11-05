@@ -9,7 +9,7 @@ The brief requires "rollback demonstrated". The runbook is in the README ("Deplo
 |---|---|
 | Date | 2026-11-05 (about 03:55-04:00 UTC) |
 | Done by | Mohammed (Owner B). He did not write the runbook (CFD-16). |
-| Host | **Ubuntu 26.04.1 LTS on WSL2** (kernel 6.18), Docker 29.9.1, Compose v5.6.0. This is **not** the team's Ubuntu Server VM: see "What this does not show". |
+| Host | **Ubuntu 26.04.1 LTS on WSL2** (kernel 6.18), Docker 29.9.1, Compose v5.6.0. This is **not** the team's Ubuntu Server VM; the VM pass is recorded further down. |
 | Tags | forward `v0.1.0` (commit 72cc4c8), previous `v0.1.0-rc.1` (commit f0916be) |
 | Model | `LLM_PROVIDER=fake`, so the smoke test needs no OpenAI key and is exact |
 | Checkout | fresh `git clone https://github.com/lqji/anthropic.git`, then `cp .env.example .env` |
@@ -117,6 +117,42 @@ JSON, keys sorted). I rolled back to `v0.1.0-rc.1` (`/health` said `0.1.0-rc.1`)
 again, then went forward (`/health` said `0.1.0`) and fetched it a third time. `cmp` found all
 three identical: the conversation and its messages survive a rollback and a roll-forward.
 
+## Pass on the team's Ubuntu Server VM
+
+Run by **MrSn001**, who did not write the runbook, and posted on PR #64; copied here with his
+numbers unchanged.
+
+| | |
+|---|---|
+| Date | 2026-11-05, 07:18-07:21 UTC |
+| Host | **Ubuntu Server 24.04.5 LTS** (kernel 6.8.0-147) in **Oracle VirtualBox 7.2.22**, 1 vCPU, 2 GB RAM, 2 GB swap, 25 GB disk. A new VM: Docker 29.9.3 and Compose v5.7.0 were installed with the README's "On a fresh Ubuntu LTS VM" block, unchanged. |
+| Checkout | `git clone https://github.com/lqji/anthropic.git clinic`, `cp .env.example .env`; in `.env` only `LLM_PROVIDER=fake` and a new random `POSTGRES_PASSWORD` (not printed) |
+| Tags | `v0.1.0` (72cc4c8), previous `v0.1.0-rc.1` (f0916be) |
+
+README commands only, no extra variables:
+
+| Step | Commands | Build (`up --build -d --wait`) | `/health` | Smoke test |
+|---|---|---|---|---|
+| 1. Deploy | `git fetch --tags && git checkout v0.1.0`, `APP_VERSION=0.1.0 docker compose up --build -d --wait`, `scripts/smoke_test.sh` | exit 0, 115 s (first build on a new machine, cold cache) | `{"status":"ok","database":"ok","version":"0.1.0"}` | 8/8 passed, exit 0 |
+| 2. Roll back | `SMOKE="$(mktemp)" && cp scripts/smoke_test.sh "$SMOKE"`, `git checkout v0.1.0-rc.1`, `APP_VERSION=0.1.0-rc.1 docker compose up --build -d --wait`, `bash "$SMOKE"; rm -f "$SMOKE"` | exit 0, 56 s | `{"status":"ok","database":"ok","version":"0.1.0-rc.1"}` | 8/8 passed (saved copy), exit 0 |
+| 3. Go forward | `git checkout v0.1.0`, `APP_VERSION=0.1.0 docker compose up --build -d --wait`, `scripts/smoke_test.sh` | exit 0, 10 s | `{"status":"ok","database":"ok","version":"0.1.0"}` | 8/8 passed, exit 0 |
+
+Every smoke run printed the same eight `ok` lines (health, doctors, free slots, conversation,
+clinic question from `visit-preparation.md`, not in documents, booking with Dr. Khalid Rahman for
+2026-11-06, cancellation paused/approved/cancelled); the emergency check was skipped by default.
+After step 2, both images were on the VM (`clinic-api:0.1.0` and `clinic-api:0.1.0-rc.1`, 538 MB
+each); nothing came from a registry.
+
+**Data check:** on `v0.1.0` a conversation (`patient_ref` `vm-rollback-keep`, "How should I
+prepare for my visit?") was saved as JSON (865 bytes, keys sorted). It was byte-identical (`cmp`)
+after the rollback and after going forward.
+
+Notes from the VM pass:
+- The VM runs with **1 vCPU**. VirtualBox runs on top of Hyper-V (WSL2/Docker Desktop) on that
+  host, and with 2 vCPUs the installed system hung at first boot; with 1 it boots in about a minute.
+- Nothing outside the README was needed on the VM. The README fixes in this PR did not apply
+  there, because it was a fresh VM with one copy of the stack.
+
 ## Findings
 
 The runbook worked as written. Three things were unclear or missing, all fixed in the README in
@@ -139,9 +175,8 @@ emergency check was skipped, as the README says it is by default.
 
 ## What this does not show
 
-- **Not the team's Ubuntu Server VM.** The issue asks for that VM; this pass ran on WSL2 Ubuntu
-  because that is the Linux host the person doing it had at hand. The commands are plain Docker and
-  Git, but the VM pass is still to do: run the same three steps there and add its output below.
+- **The WSL2 passes above were not on the team's Ubuntu Server VM.** The VM pass is the section
+  "Pass on the team's Ubuntu Server VM" below, run by MrSn001.
 - **Same database schema on both tags.** The two tags share one schema, so this does not test the
   README's backup-and-restore path for a release with a different schema.
 - **Data survival was checked with one conversation only** (see the data check above). Bookings

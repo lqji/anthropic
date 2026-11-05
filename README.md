@@ -211,7 +211,7 @@ curl -s http://localhost:8000/health           # "version" must be the release y
 bash scripts/smoke_test.sh
 ```
 
-The rollback was rehearsed once, on Ubuntu under WSL2: see [docs/rollback-rehearsal.md](docs/rollback-rehearsal.md).
+The rollback was rehearsed on the team's Ubuntu Server VM, and before that on WSL2: see [docs/rollback-rehearsal.md](docs/rollback-rehearsal.md).
 
 ### Cut a release
 
