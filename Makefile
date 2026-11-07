@@ -44,7 +44,7 @@ db: ## Start only PostgreSQL on 127.0.0.1:5432 for the tests, and create clinic_
 
 test: ## pytest with coverage >= 80% on clinic_test (run `make db` first)
 	@uv run python -c "import psycopg, sys; psycopg.connect(sys.argv[1], connect_timeout=3).close()" '$(TEST_DATABASE_URL)' 2>/dev/null \
-		|| { echo "Cannot reach the test database (clinic_test on 127.0.0.1:5432): run make db first"; exit 1; }
+		|| { echo "Cannot reach the test database at TEST_DATABASE_URL: run make db first, or if you changed POSTGRES_PASSWORD in .env, pass make test TEST_DATABASE_URL=postgresql://clinic:<password>@localhost:5432/clinic_test"; exit 1; }
 	DATABASE_URL='$(TEST_DATABASE_URL)' LLM_PROVIDER=fake LANGGRAPH_STRICT_MSGPACK=true \
 		uv run pytest --cov=clinic --cov-report=term-missing --cov-fail-under=80
 
