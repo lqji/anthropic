@@ -8,7 +8,7 @@ from fastapi import FastAPI
 from langgraph.checkpoint.postgres import PostgresSaver
 
 from clinic import __version__
-from clinic.api import appointments, approvals, conversations, emergencies, health
+from clinic.api import appointments, approvals, audit, conversations, emergencies, health
 from clinic.clock import Clock, SystemClock
 from clinic.config import Settings
 from clinic.db import (
@@ -66,9 +66,9 @@ def prepare_database(settings: Settings, clock: Clock) -> bool:
             connect_timeout=CONNECT_TIMEOUT_S,
             options=f"-c statement_timeout={SETUP_STATEMENT_TIMEOUT_MS}",
         ) as conn:
-            apply_schema(conn)
+            apply_schema(conn, settings.db_dir)
             KnowledgeLoader(settings.clinic_docs_dir).load(conn)
-            seed_appointments(conn, settings.clinic_timezone, clock.now())
+            seed_appointments(conn, settings.db_dir, settings.clinic_timezone, clock.now())
         setup_checkpointer(settings.database_url)
     except psycopg.OperationalError as exc:
         if not is_unreachable(exc):
@@ -201,4 +201,5 @@ def create_app(
     app.include_router(conversations.router)
     app.include_router(emergencies.router)
     app.include_router(approvals.router)
+    app.include_router(audit.router)
     return app

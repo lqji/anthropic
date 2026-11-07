@@ -14,6 +14,23 @@ curl localhost:8000/health
 
 Interactive API docs: <http://localhost:8000/docs>. No API key? Set `LLM_PROVIDER=fake` for a deterministic demo mode.
 
+A fresh start (`docker compose down -v` first for a clean database) creates the schema, the 4 doctors (2 in each of 2 specialties), their slots for the next 5 days and the 6 clinic documents. No manual step: the app applies `db/` and `seed/` itself.
+
+One copy per Docker engine: the compose project is named `clinic-front-desk`, so a second checkout on the same machine takes over the same containers and the same database volume. Run `docker compose down` in the other checkout first.
+
+### Files
+
+```text
+db/schema/NN_*.sql     tables and indexes, incl. the append-only audit list (idempotent, applied on every start)
+db/seed/NN_*.sql       demo specialties and doctors (applied once, while there are no doctors)
+seed/clinic_docs/      the 6 clinic documents (Markdown), loaded and chunked at start
+seed/sample_messages.json  sample patient messages for every intent, and emergencies
+src/clinic/            api -> services -> workflows -> repositories; domain; llm; rag
+docs/                  architecture.md (diagrams, API table, risks), api.md (incl. the audit list), workflow.md, adr/ (decision records)
+scripts/smoke_test.sh  post-deploy check
+tests/                 pytest (real PostgreSQL, FakeLLM)
+```
+
 ## Develop and test
 
 ```bash
@@ -24,6 +41,12 @@ uv run pytest --cov=clinic --cov-fail-under=80   # needs Postgres, see DATABASE_
 ```
 
 CI runs the same commands against a Postgres service with no OpenAI key.
+
+Shortcuts: `make help` lists them. `make db` starts only PostgreSQL and creates a separate
+`clinic_test` database, `make check` runs the same checks as CI against it (the tests drop
+databases and empty tables, so they never use the app's `clinic` database), and `make up`,
+`make smoke` and `make down` run the app. `make reset CONFIRM=yes` deletes the database volume for
+a clean demo. Each target runs the command shown in this README, so make is optional.
 
 ## Team workflow and agreements
 
@@ -66,6 +89,7 @@ All settings are environment variables; the service refuses to start and names e
 | `INTENT_MIN_CONFIDENCE` | `0.6` | Below this the assistant asks what the patient needs. |
 | `RAG_MIN_SCORE`, `RAG_TOP_K` | `0.30`, `3` | Minimum score and number of document sections used to answer. |
 | `CLINIC_DOCS_DIR` | `seed/clinic_docs` | Markdown documents loaded at startup. |
+| `DB_DIR` | `db` | Folder with `schema/` and `seed/` SQL applied at startup. |
 | `LANGGRAPH_STRICT_MSGPACK` | `true` | Keep `true`: checkpoints may only hold plain data. |
 | `APP_VERSION` | `dev` | Names the image (`clinic-api:<version>`); pass it on the command line, not in `.env`. `/health` reports the version of the code (`src/clinic/__init__.py`) whatever this says, so it cannot disagree with what is running. |
 
@@ -118,6 +142,9 @@ endpoint can close. On a demo or staging system add it with `RUN_EMERGENCY=1 scr
 image (`clinic-api:0.1.0`), so that two releases can sit side by side for a rollback. `/health`
 reports the version of the code you built (the `APP_VERSION` variable is ignored), so check it after a deploy: it should match the tag.
 
+Only one copy of the stack can run per Docker engine (see "One copy per Docker engine" under
+Run it): stop any other copy first.
+
 `--wait` returns only when both services are healthy. The smoke test then walks through every
 feature: health, a clinic question, a question the documents do not cover, a booking, a
 cancellation that waits for staff, and (with `RUN_EMERGENCY=1`) an emergency. It prints one `ok` line per check, stops at
@@ -140,6 +167,7 @@ tag may not contain the smoke test, so copy it out of the checkout first and run
 SMOKE="$(mktemp)" && cp scripts/smoke_test.sh "$SMOKE"
 git checkout <previous-tag>
 APP_VERSION=<previous-version> docker compose up --build -d --wait
+curl -s http://localhost:8000/health           # "version" must be the previous version
 bash "$SMOKE"; rm -f "$SMOKE"
 ```
 
@@ -178,8 +206,18 @@ bash "$SMOKE"
 If the restore fails, the script stops before the deploy and `backup-now.sql` is what you go back
 to. Delete both backup files when you no longer need them.
 
-After a rollback the checkout is on the old tag (detached HEAD). To go forward again, run
-`git checkout <tag>` for the release you want and deploy it as above.
+After a rollback the checkout is on the old tag (detached HEAD). To go forward again, check out
+the release you want and deploy it as above. The newer scripts are in that checkout, so the
+smoke test needs no copy:
+
+```bash
+git checkout <tag>                             # for example v0.1.0
+APP_VERSION=<version> docker compose up --build -d --wait
+curl -s http://localhost:8000/health           # "version" must be the release you want
+bash scripts/smoke_test.sh
+```
+
+The rollback was rehearsed on the team's Ubuntu Server VM, and before that on WSL2: see [docs/rollback-rehearsal.md](docs/rollback-rehearsal.md).
 
 ### Cut a release
 
@@ -211,6 +249,6 @@ The full list for each release is in [CHANGELOG.md](CHANGELOG.md).
 - A pending approval never expires.
 - While a conversation waits for approval, every non-emergency message gets "still waiting".
 - English only.
-- Demo slots are seeded once, on the first start, for 5 days from that day (2 doctors, 30-minute
+- The schema (`db/schema/`) and the demo doctors (`db/seed/`) are plain SQL, applied by the app at startup; see [ADR 0001](docs/adr/0001-schema-and-seed-under-db.md). Demo slots are seeded once, on the first start, for 5 days from that day (4 doctors, 30-minute
   slots 09:00-13:00 and 14:00-19:00). They do not roll forward: after 5 days there are no future
   slots until the database is reset with `docker compose down -v`.

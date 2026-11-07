@@ -110,6 +110,37 @@ Decide an approval. The paused conversation resumes and the patient is told the 
 - `422 validation_error`: blank `decided_by` or a `reason` under 3 characters. The approval stays
   pending.
 
+## Audit (CFD-30)
+
+What was booked, cancelled, approved or rejected, so the clinic manager can see the history that
+`bookings` and `approvals` no longer show (they keep only the current status). The list is
+append-only: the database refuses any UPDATE or DELETE on it. A row is written in the same
+transaction as the change it describes, so a change that fails leaves no row and a change that
+commits cannot lack one. A repeated request that changes nothing writes nothing. Times come from
+the injected `Clock`.
+
+### `GET /api/v1/audit`
+Events newest first, one page at a time.
+
+- `limit`: page size, 1 to 500 (default 100). `offset`: how many to skip (default 0).
+- `booking_id`: only the events of this booking. `conversation_id`: only the events of this
+  conversation. Both together must match both.
+- `200`: `[{"id": 12, "at": "2026-11-02T12:00:00+04:00", "actor_type": "staff", "actor": "desk-1", "action": "approval_approved", "outcome": "approved", "booking_id": 7, "conversation_id": "<uuid>", "reason": "Patient called to confirm"}]`
+- `422 validation_error`: `limit` or `offset` out of range, or an id that is not a number or UUID.
+
+| `action` | When | `actor_type` / `actor` | `outcome` |
+|---|---|---|---|
+| `booking_created` | a later-day booking is confirmed at once | `patient` / the conversation id | `confirmed` |
+| `same_day_requested` | a same-day booking is held for staff | `patient` / the conversation id | `pending_approval` |
+| `cancellation_requested` | a cancellation waits for staff | `patient` / the conversation id | `pending_approval` |
+| `approval_approved`, `approval_rejected` | staff decide | `staff` / `decided_by`, with `reason` | `approved`, `rejected` |
+| `booking_confirmed` | a held same-day booking is confirmed after approval | `system` / `workflow` | `confirmed` |
+| `booking_cancelled` | the cancellation is carried out after approval | `system` / `workflow` | `cancelled` |
+| `booking_rejected` | a held same-day booking is released after a rejection | `system` / `workflow` | `rejected` |
+
+Rows hold no patient message text and no patient reference. `reason` is the text staff typed on a
+decision; it is `null` on every other row.
+
 ## Appointments (CFD-12)
 
 Times are returned in clinic time (`CLINIC_TIMEZONE`) with their UTC offset, e.g.

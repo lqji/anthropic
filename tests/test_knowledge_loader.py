@@ -1,7 +1,6 @@
 import logging
 import shutil
 from collections.abc import Iterator
-from importlib.resources import files
 from pathlib import Path
 
 import psycopg
@@ -13,11 +12,14 @@ from clinic.rag.chunking import chunk_document
 from clinic.rag.loader import KnowledgeLoader
 from clinic.repositories import knowledge
 
+DB_DIR = Path(__file__).resolve().parents[1] / "db"
 SEED_DIR = Path(__file__).resolve().parents[1] / "seed" / "clinic_docs"
 SEED_NAMES = [
     "cancellation-policy.md",
     "insurance.md",
+    "new-patients.md",
     "opening-hours.md",
+    "payment-and-fees.md",
     "visit-preparation.md",
 ]
 
@@ -25,7 +27,7 @@ SEED_NAMES = [
 @pytest.fixture
 def conn(database_url: str) -> Iterator[Connection[TupleRow]]:
     """Autocommit connection with the knowledge schema applied and its tables emptied."""
-    schema = files("clinic").joinpath("sql/04_knowledge.sql").read_text(encoding="utf-8")
+    schema = (DB_DIR / "schema" / "04_knowledge.sql").read_text(encoding="utf-8")
     with psycopg.connect(database_url, autocommit=True, connect_timeout=5) as connection:
         connection.execute(schema)
         connection.execute("TRUNCATE documents, doc_chunks RESTART IDENTITY")

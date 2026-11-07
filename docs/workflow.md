@@ -130,7 +130,9 @@ A model outage raises `LLMUnavailable` (API 503) before the turn writes anything
 lists the valid names instead, and never repeats what the patient typed. `other` replies with a
 fixed capabilities message (`outcome: "other"`). Neither reply is written by the model, and neither
 writes to the database. `seed/sample_messages.json` holds sample patient messages with the intent
-and node each must reach; a test runs them through the graph.
+and node each must reach; a test runs them through the graph. Its emergency samples never reach
+the graph: they carry the `outcome` and the safety `rule` the API returns, checked in
+`tests/test_emergency_api.py`.
 
 ## `find_slots` (CFD-12)
 
@@ -213,7 +215,7 @@ last `HISTORY_WINDOW` messages at most, starting with a patient message.
 
 ## Startup
 
-On every start the lifespan runs `sql/*.sql` and `PostgresSaver.setup()` (both idempotent; setup
+On every start the lifespan runs `db/schema/*.sql` and `PostgresSaver.setup()` (both idempotent; setup
 uses its own autocommit connection). The graph's saver uses a separate pool with autocommit and
 dict rows, so the app pool keeps one-block-one-transaction semantics. If the database is down at
 start, this is logged as `startup.database_unavailable`, `/health` reports 503, and a background

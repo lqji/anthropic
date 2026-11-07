@@ -6,17 +6,20 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import psycopg
+import pytest
 from fastapi.testclient import TestClient
 
 from clinic.app import create_app
 from clinic.clock import FixedClock
 from clinic.config import Settings
 from clinic.domain.schedule import day_bounds, local_date, slot_starts
-from clinic.seed import DOCTORS, SEED_DAYS, seed_slots
+from clinic.schema import apply_schema
+from clinic.seed import SEED_DAYS, seed_appointments, seed_slots
 from tests.conftest import temporary_database
 
 ENV_EXAMPLE = Path(__file__).resolve().parents[1] / ".env.example"
 FIRST_DAY = date(2026, 11, 2)
+DOCTOR_IDS = [1, 2, 3, 4]
 
 
 def _env_example(name: str) -> str:
@@ -35,18 +38,17 @@ def test_seed_time_zone_is_the_one_in_env_example() -> None:
     assert timezone == "Asia/Muscat"
     assert Settings.model_fields["clinic_timezone"].default == timezone
     # Seeded with that zone, the first slot is 09:00 at the clinic, which is 05:00 UTC in Muscat.
-    first_start = seed_slots(FIRST_DAY, timezone)[0][1]
+    first_start = seed_slots(DOCTOR_IDS, FIRST_DAY, timezone)[0][1]
     assert first_start.astimezone(ZoneInfo(timezone)).time() == time(9, 0)
     assert first_start.astimezone(UTC).time() == time(5, 0)
 
 
-def test_seed_has_180_thirty_minute_slots_18_per_doctor_per_day() -> None:
+def test_seed_has_360_thirty_minute_slots_18_per_doctor_per_day() -> None:
     timezone = _env_example("CLINIC_TIMEZONE")
-    slots = seed_slots(FIRST_DAY, timezone)
+    slots = seed_slots(DOCTOR_IDS, FIRST_DAY, timezone)
 
     per_doctor_day = Counter((doctor, local_date(start, timezone)) for doctor, start, _ in slots)
-    assert len(slots) == 180
-    assert len(DOCTORS) == 2
+    assert len(slots) == 360  # 4 doctors x 5 days x 18 slots
     assert set(per_doctor_day.values()) == {18}
     assert {day for _, day in per_doctor_day} == {
         FIRST_DAY + timedelta(days=n) for n in range(SEED_DAYS)
@@ -99,7 +101,32 @@ def test_first_start_seeds_and_a_restart_adds_nothing(database_url: str) -> None
             first_day = conn.execute(
                 "SELECT min((starts_at AT TIME ZONE 'Asia/Muscat')::date) FROM slots"
             ).fetchone()
+            per_specialty = conn.execute(
+                """
+                SELECT s.name, count(*) FROM doctors d JOIN specialties s ON s.id = d.specialty_id
+                GROUP BY s.name ORDER BY s.name
+                """
+            ).fetchall()
+            per_doctor = conn.execute(
+                "SELECT doctor_id, count(*) FROM slots GROUP BY doctor_id ORDER BY doctor_id"
+            ).fetchall()
 
-    assert counts == (2, 2, 180, 180)
+    assert counts == (2, 4, 360, 360)
     assert per_doctor_day == [(18,)]
     assert first_day == (FIRST_DAY,)  # seeded from today, so same-day slots exist
+    assert per_specialty == [("Dermatology", 2), ("General Practice", 2)]
+    assert per_doctor == [(doctor_id, 5 * 18) for doctor_id in DOCTOR_IDS]  # 5 days each
+
+
+def test_a_seed_folder_without_doctors_stops_startup_and_seeds_nothing(
+    database_url: str, tmp_path: Path
+) -> None:
+    (tmp_path / "seed").mkdir()  # exists, holds no .sql files
+    with temporary_database(database_url) as url, psycopg.connect(url, autocommit=True) as conn:
+        apply_schema(conn)
+        with pytest.raises(ValueError, match="added no doctors"):
+            seed_appointments(
+                conn, tmp_path, "Asia/Muscat", datetime(2026, 11, 2, 8, 0, tzinfo=UTC)
+            )
+        row = conn.execute("SELECT (SELECT count(*) FROM doctors), (SELECT count(*) FROM slots)")
+        assert row.fetchone() == (0, 0)

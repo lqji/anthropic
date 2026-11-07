@@ -1,4 +1,4 @@
-"""SQL for the `approvals` table (schema in sql/03_approvals.sql)."""
+"""SQL for the `approvals` table (schema in db/schema/03_approvals.sql)."""
 
 from dataclasses import dataclass
 from datetime import datetime
@@ -6,6 +6,15 @@ from uuid import UUID
 
 from psycopg import Connection
 from psycopg.rows import TupleRow
+
+from clinic.repositories import audit
+
+# What a new approval of each kind, and each decision, is called in the audit list.
+_REQUESTED = {
+    "cancellation": audit.CANCELLATION_REQUESTED,
+    "same_day_booking": audit.SAME_DAY_REQUESTED,
+}
+_DECIDED = {"approved": audit.APPROVAL_APPROVED, "rejected": audit.APPROVAL_REJECTED}
 
 
 @dataclass(frozen=True)
@@ -31,20 +40,31 @@ def create(
     now: datetime,
 ) -> None:
     """Raises psycopg.errors.UniqueViolation if the booking or conversation already has a
-    pending approval."""
-    conn.execute(
-        """
-        INSERT INTO approvals (id, conversation_id, kind, booking_id, created_at)
-        VALUES (%(id)s, %(conversation_id)s, %(kind)s, %(booking_id)s, %(now)s)
-        """,
-        {
-            "id": approval_id,
-            "conversation_id": conversation_id,
-            "kind": kind,
-            "booking_id": booking_id,
-            "now": now,
-        },
-    )
+    pending approval. The request is audited in the same transaction."""
+    with conn.transaction():
+        conn.execute(
+            """
+            INSERT INTO approvals (id, conversation_id, kind, booking_id, created_at)
+            VALUES (%(id)s, %(conversation_id)s, %(kind)s, %(booking_id)s, %(now)s)
+            """,
+            {
+                "id": approval_id,
+                "conversation_id": conversation_id,
+                "kind": kind,
+                "booking_id": booking_id,
+                "now": now,
+            },
+        )
+        audit.record(
+            conn,
+            now=now,
+            actor_type=audit.PATIENT,
+            actor=str(conversation_id),
+            action=_REQUESTED[kind],
+            outcome="pending_approval",
+            booking_id=booking_id,
+            conversation_id=conversation_id,
+        )
 
 
 def get(conn: Connection[TupleRow], approval_id: UUID) -> ApprovalRow | None:
@@ -115,25 +135,41 @@ def decide(
 
     The conditional UPDATE makes the decision race-free across requests and processes: of two
     concurrent decisions exactly one gets a row back. None means already decided (or unknown).
+    The winning decision is audited in the same transaction; a losing one writes nothing.
     """
-    row = conn.execute(
-        """
-        UPDATE approvals
-        SET status = %(status)s, decided_by = %(decided_by)s, reason = %(reason)s,
-            decided_at = %(now)s
-        WHERE id = %(id)s AND status = 'pending'
-        RETURNING id, conversation_id, kind, booking_id, status, decided_by, reason,
-                  decided_at, resumed_at, created_at
-        """,
-        {
-            "id": approval_id,
-            "status": status,
-            "decided_by": decided_by,
-            "reason": reason,
-            "now": now,
-        },
-    ).fetchone()
-    return None if row is None else ApprovalRow(*row)
+    with conn.transaction():
+        row = conn.execute(
+            """
+            UPDATE approvals
+            SET status = %(status)s, decided_by = %(decided_by)s, reason = %(reason)s,
+                decided_at = %(now)s
+            WHERE id = %(id)s AND status = 'pending'
+            RETURNING id, conversation_id, kind, booking_id, status, decided_by, reason,
+                      decided_at, resumed_at, created_at
+            """,
+            {
+                "id": approval_id,
+                "status": status,
+                "decided_by": decided_by,
+                "reason": reason,
+                "now": now,
+            },
+        ).fetchone()
+        if row is None:
+            return None
+        decided = ApprovalRow(*row)
+        audit.record(
+            conn,
+            now=now,
+            actor_type=audit.STAFF,
+            actor=decided_by,
+            action=_DECIDED[status],
+            outcome=status,
+            booking_id=decided.booking_id,
+            conversation_id=decided.conversation_id,
+            reason=reason,
+        )
+        return decided
 
 
 def mark_resumed(conn: Connection[TupleRow], approval_id: UUID, now: datetime) -> None:

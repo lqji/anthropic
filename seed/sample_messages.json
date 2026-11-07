@@ -14,5 +14,8 @@
   {"text": "Hello", "intent": "other", "node": "other"},
   {"text": "Thanks, bye", "intent": "other", "node": "other"},
   {"text": "asdf qwer", "intent": "unclear", "node": "clarify"},
-  {"text": "Book me with Dr. Zaid tomorrow", "intent": "book", "node": "clarify"}
+  {"text": "Book me with Dr. Zaid tomorrow", "intent": "book", "node": "clarify"},
+  {"text": "I have crushing chest pain and my left arm hurts", "intent": "emergency", "outcome": "emergency", "rule": "chest_pain"},
+  {"text": "My father can't breathe properly", "intent": "emergency", "outcome": "emergency", "rule": "breathing"},
+  {"text": "My son collapsed and is not responding", "intent": "emergency", "outcome": "emergency", "rule": "unconscious"}
 ]
