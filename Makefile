@@ -43,6 +43,8 @@ db: ## Start only PostgreSQL on 127.0.0.1:5432 for the tests, and create clinic_
 	$(DEV_COMPOSE) exec -T db sh -c 'psql -U "$$POSTGRES_USER" -d postgres -tAc "SELECT 1 FROM pg_database WHERE datname = '\''clinic_test'\''" | grep -q 1 || createdb -U "$$POSTGRES_USER" clinic_test'
 
 test: ## pytest with coverage >= 80% on clinic_test (run `make db` first)
+	@uv run python -c "import psycopg, sys; psycopg.connect(sys.argv[1], connect_timeout=3).close()" '$(TEST_DATABASE_URL)' 2>/dev/null \
+		|| { echo "Cannot reach the test database (clinic_test on 127.0.0.1:5432): run make db first"; exit 1; }
 	DATABASE_URL='$(TEST_DATABASE_URL)' LLM_PROVIDER=fake LANGGRAPH_STRICT_MSGPACK=true \
 		uv run pytest --cov=clinic --cov-report=term-missing --cov-fail-under=80
 
@@ -50,7 +52,7 @@ compose-check: ## The compose file is valid with your .env
 	@test -f .env || { echo "No .env yet: run make env"; exit 1; }
 	$(COMPOSE) config -q
 
-check: lint format-check typecheck test compose-check ## Everything CI checks
+check: compose-check lint format-check typecheck test ## Everything CI checks (needs `make db`)
 
 ##@ Run and deploy (README: Run it, Deploy a version)
 
