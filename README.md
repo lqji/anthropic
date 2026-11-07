@@ -42,6 +42,12 @@ uv run pytest --cov=clinic --cov-fail-under=80   # needs Postgres, see DATABASE_
 
 CI runs the same commands against a Postgres service with no OpenAI key.
 
+Shortcuts: `make help` lists them. `make db` starts only PostgreSQL and creates a separate
+`clinic_test` database, `make check` runs the same checks as CI against it (the tests drop
+databases and empty tables, so they never use the app's `clinic` database), and `make up`,
+`make smoke` and `make down` run the app. `make reset CONFIRM=yes` deletes the database volume for
+a clean demo. Each target runs the command shown in this README, so make is optional.
+
 ## Team workflow and agreements
 
 | Who | GitHub | Role |
