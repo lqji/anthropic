@@ -73,9 +73,11 @@ logs: ## Follow the api and db logs (Ctrl+C to stop)
 smoke: ## Run scripts/smoke_test.sh against BASE_URL (default http://localhost:8000)
 	bash scripts/smoke_test.sh '$(BASE_URL)'
 
-backup: ## pg_dump the database to backup-<date>.sql (git-ignored, holds patient data)
-	(umask 077; $(COMPOSE) exec -T db sh -c 'pg_dump -U "$$POSTGRES_USER" "$$POSTGRES_DB"' > backup-$$(date +%F).sql)
-	@echo "Wrote backup-$$(date +%F).sql"
+backup: ## pg_dump the database to backup-<date>-<time>.sql (git-ignored, holds patient data)
+	@f=backup-$$(date +%F-%H%M%S).sql; tmp=$${f%.sql}.partial.sql; \
+	if (umask 077; $(COMPOSE) exec -T db sh -c 'pg_dump -U "$$POSTGRES_USER" "$$POSTGRES_DB"' > $$tmp) && [ -s $$tmp ]; then \
+		mv $$tmp $$f && echo "Wrote $$f"; \
+	else rm -f $$tmp; echo "Backup FAILED: no file written"; exit 1; fi
 
 reset: ## DELETE the database volume and start again with fresh demo data (needs CONFIRM=yes)
 	@if [ "$(CONFIRM)" != "yes" ]; then \
