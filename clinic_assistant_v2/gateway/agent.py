@@ -7,13 +7,14 @@ The agent holds zero domain secrets and NEVER accepts or asks for a user ID.
 
 from __future__ import annotations
 
+import logging
+import os
 import re
 from typing import Any, TypedDict
 
+import httpx
 from langgraph.graph import END, StateGraph
 
-# Import domain tool functions directly for local execution/testing,
-# while in production/compose they call out over MCP client transports.
 from services.appointments.server import (
     book_appointment,
     cancel_appointment,
@@ -26,6 +27,8 @@ from services.records.server import (
     get_my_medical_records,
 )
 from shared.auth import verify_token
+
+logger = logging.getLogger(__name__)
 
 
 class AgentState(TypedDict):
@@ -97,6 +100,29 @@ def classify_intent_node(state: AgentState) -> dict[str, Any]:
     return {"intent": "clinic_knowledge"}
 
 
+def _invoke_mcp(
+    url: str | None,
+    tool_name: str,
+    params: dict[str, Any],
+    fallback_fn: Any,
+    token: str,
+) -> Any:
+    """Invoke remote FastMCP service over HTTP forwarding Bearer token, or fall back locally."""
+    if url:
+        try:
+            with httpx.Client(timeout=5.0) as client:
+                resp = client.post(
+                    f"{url.rstrip('/')}/call",
+                    json={"method": tool_name, "params": params},
+                    headers={"Authorization": f"Bearer {token}"},
+                )
+                if resp.status_code == 200:
+                    return resp.json()
+        except Exception as e:
+            logger.debug("Remote MCP call failed, using local fallback: %s", e)
+    return fallback_fn(**params, token=token)
+
+
 def execute_tool_node(state: AgentState) -> dict[str, Any]:
     """Execute the appropriate MCP tool, forwarding the caller's JWT token."""
     intent = state["intent"]
@@ -106,46 +132,65 @@ def execute_tool_node(state: AgentState) -> dict[str, Any]:
     if intent in ("emergency", "no_diagnosis"):
         return {"tool_result": None}
 
+    records_url = os.environ.get("RECORDS_MCP_URL")
+    appointments_url = os.environ.get("APPOINTMENTS_MCP_URL")
+    pharmacy_url = os.environ.get("PHARMACY_MCP_URL")
+    knowledge_url = os.environ.get("KNOWLEDGE_MCP_URL")
+
     if intent == "get_last_record":
-        res = get_my_last_medical_record(token=token)
+        res = _invoke_mcp(
+            records_url, "get_my_last_medical_record", {}, get_my_last_medical_record, token
+        )
         return {"tool_result": res}
 
     if intent == "get_records":
-        res = get_my_medical_records(token=token)
+        res = _invoke_mcp(records_url, "get_my_medical_records", {}, get_my_medical_records, token)
         return {"tool_result": res}
 
     if intent == "list_appointments":
-        res = list_my_appointments(token=token)
+        res = _invoke_mcp(appointments_url, "list_my_appointments", {}, list_my_appointments, token)
         return {"tool_result": res}
 
     if intent == "book_appointment":
-        # Extract basic appointment parameters if mentioned
         doc_match = re.search(r"with (dr\.?\s+[a-zA-Z]+)", msg, re.I)
         doctor = doc_match.group(1) if doc_match else "Dr. Sarah Smith"
-        res = book_appointment(
-            doctor=doctor, date="2026-12-05", time="10:00", notes="Booked via chat", token=token
-        )
+        params = {
+            "doctor": doctor,
+            "date": "2026-12-05",
+            "time": "10:00",
+            "notes": "Booked via chat",
+        }
+        res = _invoke_mcp(appointments_url, "book_appointment", params, book_appointment, token)
         return {"tool_result": res}
 
     if intent == "cancel_appointment":
         id_match = re.search(r"(apt-[a-zA-Z0-9]+)", msg)
         apt_id = id_match.group(1) if id_match else "apt-a1"
-        res = cancel_appointment(appointment_id=apt_id, token=token)
+        res = _invoke_mcp(
+            appointments_url,
+            "cancel_appointment",
+            {"appointment_id": apt_id},
+            cancel_appointment,
+            token,
+        )
         return {"tool_result": res}
 
     if intent == "view_inventory":
-        res = view_inventory(token=token)
+        res = _invoke_mcp(pharmacy_url, "view_inventory", {}, view_inventory, token)
         return {"tool_result": res}
 
     if intent == "add_inventory":
         qty_match = re.search(r"(\d+)", msg)
         qty = int(qty_match.group(1)) if qty_match else 10
-        res = add_inventory(medicine="Paracetamol", quantity=qty, token=token)
+        params = {"medicine": "Paracetamol", "quantity": qty}
+        res = _invoke_mcp(pharmacy_url, "add_inventory", params, add_inventory, token)
         return {"tool_result": res}
 
     # Default: Knowledge Search
-    docs = search_clinic_docs(query=msg, top_k=2, token=token)
-    return {"tool_result": docs}
+    res = _invoke_mcp(
+        knowledge_url, "search_clinic_docs", {"query": msg, "top_k": 2}, search_clinic_docs, token
+    )
+    return {"tool_result": res}
 
 
 def generate_reply_node(state: AgentState) -> dict[str, Any]:
