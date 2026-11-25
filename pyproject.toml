@@ -49,3 +49,8 @@ files = ["src", "tests"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.uv.workspace]
+members = [
+    "clinic_assistant_v2",
+]

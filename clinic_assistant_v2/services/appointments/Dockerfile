@@ -1,0 +1,12 @@
+FROM python:3.13-slim
+
+WORKDIR /app
+ENV PYTHONUNBUFFERED=1 PYTHONPATH=/app
+
+RUN pip install --no-cache-dir fastmcp pyjwt
+
+COPY shared /app/shared
+COPY services/appointments /app/services/appointments
+
+EXPOSE 8001
+CMD ["python", "services/appointments/server.py"]

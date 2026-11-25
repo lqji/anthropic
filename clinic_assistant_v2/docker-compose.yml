@@ -1,0 +1,110 @@
+version: "3.8"
+
+networks:
+  clinic-net:
+    driver: bridge
+
+services:
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: clinic-qdrant
+    ports:
+      - "6333:6333"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:6333/healthz || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    networks:
+      - clinic-net
+
+  appointments-mcp:
+    build:
+      context: .
+      dockerfile: services/appointments/Dockerfile
+    container_name: clinic-appointments-mcp
+    ports:
+      - "8001:8001"
+    environment:
+      - PORT=8001
+      - HOST=0.0.0.0
+      - JWT_SECRET=${JWT_SECRET}
+    networks:
+      - clinic-net
+
+  pharmacy-mcp:
+    build:
+      context: .
+      dockerfile: services/pharmacy/Dockerfile
+    container_name: clinic-pharmacy-mcp
+    ports:
+      - "8002:8002"
+    environment:
+      - PORT=8002
+      - HOST=0.0.0.0
+      - JWT_SECRET=${JWT_SECRET}
+    networks:
+      - clinic-net
+
+  records-mcp:
+    build:
+      context: .
+      dockerfile: services/records/Dockerfile
+    container_name: clinic-records-mcp
+    ports:
+      - "8003:8003"
+    environment:
+      - PORT=8003
+      - HOST=0.0.0.0
+      - JWT_SECRET=${JWT_SECRET}
+    networks:
+      - clinic-net
+
+  knowledge-mcp:
+    build:
+      context: .
+      dockerfile: services/knowledge/Dockerfile
+    container_name: clinic-knowledge-mcp
+    ports:
+      - "8004:8004"
+    environment:
+      - PORT=8004
+      - HOST=0.0.0.0
+      - JWT_SECRET=${JWT_SECRET}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - QDRANT_URL=http://qdrant:6333
+    depends_on:
+      - qdrant
+    networks:
+      - clinic-net
+
+  gateway:
+    build:
+      context: .
+      dockerfile: gateway/Dockerfile
+    container_name: clinic-gateway
+    ports:
+      - "8000:8000"
+    environment:
+      - PORT=8000
+      - HOST=0.0.0.0
+      - JWT_SECRET=${JWT_SECRET}
+      - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID}
+      - GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET}
+      - GOOGLE_REDIRECT_URI=http://localhost:8000/auth/callback
+      - APPOINTMENTS_MCP_URL=http://appointments-mcp:8001
+      - PHARMACY_MCP_URL=http://pharmacy-mcp:8002
+      - RECORDS_MCP_URL=http://records-mcp:8003
+      - KNOWLEDGE_MCP_URL=http://knowledge-mcp:8004
+    depends_on:
+      - appointments-mcp
+      - pharmacy-mcp
+      - records-mcp
+      - knowledge-mcp
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    networks:
+      - clinic-net
