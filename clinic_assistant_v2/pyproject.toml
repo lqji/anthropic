@@ -1,0 +1,39 @@
+[project]
+name = "clinic-assistant-v2"
+version = "0.1.0"
+description = "Clinic Assistant v2: Dockerised FastMCP servers with Qdrant RAG and Google OAuth"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "fastapi>=0.162.0",
+    "fastmcp>=4.2.6",
+    "httpx>=0.28.1",
+    "langgraph>=1.2.19",
+    "pyjwt>=2.15.1",
+    "pypdf>=7.1.1",
+    "pytest>=9.2.0",
+    "pytest-asyncio>=1.5.0",
+    "qdrant-client>=1.20.0",
+    "uvicorn>=0.54.0",
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "S"]
+ignore = [
+    "S104",  # Binding to 0.0.0.0 is required for Docker containers
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["S101", "S105", "S106"]
+"gateway/main.py" = ["S105"]
+
+
+
