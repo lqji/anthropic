@@ -32,6 +32,14 @@ docker compose up --build -d --wait
 - One issue per branch: `feature/CFD-xx-<name>-<title>`. PR title `CFD-xx: <title>`. Squash merge. No direct pushes to `main`.
 - Tests in the same PR as the code. Update `docs/` if a contract changes.
 
+## Clinic Assistant v2 Refactor (Issue #314 / CFD-75)
+For the microservices refactor under `clinic_assistant_v2/` (upstream #314 / local CFD-75):
+- Domain tools are separated into Dockerised FastMCP servers (:8001 appointments, :8002 pharmacy, :8003 records, :8004 knowledge) on `clinic-net`.
+- Clinic document knowledge retrieval uses Qdrant (:6333) collection `clinic_docs`.
+- Auth uses Google OAuth 2.0 with signed HS256 JWTs forwarded as Bearer tokens to domain servers. User identity is derived strictly from verified JWT claims; the assistant never prompts for an ID.
+- Safety: `is_emergency()` runs deterministically before tool calls, and direct medical diagnosis is strictly guarded.
+- Legacy `src/clinic/` PostgreSQL monolith is retained in parallel during migration.
+
 ## Working with Claude Code
 - Do not read or print `.env`. Do not commit secrets.
 - Keep changes inside the issue's scope. Do not start another issue's work.

@@ -13,6 +13,7 @@ SECRET = "super-secure-shared-clinic-secret-key-12345"
 def set_env(monkeypatch):
     monkeypatch.setenv("JWT_SECRET", SECRET)
     monkeypatch.setenv("GOOGLE_CLIENT_ID", "clinic-test-client-id")
+    monkeypatch.setenv("TEST_AUTH_ENABLED", "true")
 
 
 @pytest.mark.asyncio
@@ -52,3 +53,24 @@ async def test_auth_callback_mints_jwt():
         assert claims["sub"] == "google-sub-alice-123"
         assert "records:read" in claims["scopes"]
         assert "appointments:read" in claims["scopes"]
+
+
+@pytest.mark.asyncio
+async def test_auth_callback_rejects_test_code_when_disabled(monkeypatch):
+    monkeypatch.setenv("TEST_AUTH_ENABLED", "false")
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get("/auth/callback?code=test-code-alice-123")
+        assert resp.status_code == 403
+        assert "disabled" in resp.json()["detail"].lower()
+
+
+@pytest.mark.asyncio
+async def test_auth_callback_fails_when_unconfigured_in_prod(monkeypatch):
+    monkeypatch.setenv("TEST_AUTH_ENABLED", "false")
+    monkeypatch.delenv("GOOGLE_CLIENT_SECRET", raising=False)
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get("/auth/callback?code=regular-google-code")
+        assert resp.status_code == 500
+        assert "not configured" in resp.json()["detail"].lower()

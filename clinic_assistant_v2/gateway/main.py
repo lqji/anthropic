@@ -66,11 +66,22 @@ async def auth_callback(
     client_secret = os.environ.get("GOOGLE_CLIENT_SECRET", "")
     redirect_uri = os.environ.get("GOOGLE_REDIRECT_URI", "http://localhost:8000/auth/callback")
 
-    # In mock / test environment without live credentials, handle deterministic test codes
-    if not client_secret or client_secret == "change-me" or code.startswith("test-code-"):
+    test_auth_enabled = os.environ.get("TEST_AUTH_ENABLED", "false").lower() == "true"
+
+    if code.startswith("test-code-"):
+        if not test_auth_enabled:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Test authorization codes are disabled in this environment",
+            )
         sub = f"google-sub-{code.replace('test-code-', '')}"
         email = f"patient-{sub}@example.com"
     else:
+        if not client_id or not client_secret:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Google OAuth credentials not configured",
+            )
         try:
             async with httpx.AsyncClient(timeout=10.0) as client:
                 token_resp = await client.post(

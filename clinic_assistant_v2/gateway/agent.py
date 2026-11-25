@@ -25,6 +25,7 @@ from services.records.server import (
     get_my_last_medical_record,
     get_my_medical_records,
 )
+from shared.auth import verify_token
 
 
 class AgentState(TypedDict):
@@ -36,10 +37,49 @@ class AgentState(TypedDict):
     reply: str
 
 
+EMERGENCY_KEYWORDS: list[str] = [
+    "chest pain",
+    "heart attack",
+    "difficulty breathing",
+    "can't breathe",
+    "shortness of breath",
+    "unconscious",
+    "heavy bleeding",
+    "severe hemorrhage",
+    "stroke",
+    "severe allergic reaction",
+    "anaphylaxis",
+]
+
+DIAGNOSIS_KEYWORDS: list[str] = [
+    "diagnose me",
+    "what disease do i have",
+    "what illness do i have",
+    "prescribe me",
+    "give me a diagnosis",
+]
+
+
+def is_emergency(message: str) -> bool:
+    """Deterministic emergency triage detection."""
+    msg = message.lower()
+    return any(kw in msg for kw in EMERGENCY_KEYWORDS)
+
+
+def is_diagnosis_request(message: str) -> bool:
+    """Deterministic medical diagnosis guard."""
+    msg = message.lower()
+    return any(kw in msg for kw in DIAGNOSIS_KEYWORDS)
+
+
 def classify_intent_node(state: AgentState) -> dict[str, Any]:
     """Classify the user message into one of the clinic domains."""
     msg = state["message"].lower()
 
+    if is_emergency(msg):
+        return {"intent": "emergency"}
+    if is_diagnosis_request(msg):
+        return {"intent": "no_diagnosis"}
     if any(k in msg for k in ["last medical record", "latest medical record", "last record"]):
         return {"intent": "get_last_record"}
     if any(k in msg for k in ["medical records", "my records", "my history"]):
@@ -62,6 +102,9 @@ def execute_tool_node(state: AgentState) -> dict[str, Any]:
     intent = state["intent"]
     token = state["token"]
     msg = state["message"]
+
+    if intent in ("emergency", "no_diagnosis"):
+        return {"tool_result": None}
 
     if intent == "get_last_record":
         res = get_my_last_medical_record(token=token)
@@ -112,6 +155,22 @@ def generate_reply_node(state: AgentState) -> dict[str, Any]:
 
     if isinstance(result, dict) and result.get("error") == "unauthorized":
         return {"reply": "Your session is unauthorized or expired. Please sign in again."}
+
+    if intent == "emergency":
+        return {
+            "reply": (
+                "EMERGENCY DETECTED: If you are experiencing a life-threatening medical "
+                "emergency, please call 9999 immediately or go to the nearest emergency room."
+            )
+        }
+
+    if intent == "no_diagnosis":
+        return {
+            "reply": (
+                "I cannot provide medical diagnoses or prescribe medications. "
+                "Please consult a doctor or book an appointment for clinical evaluation."
+            )
+        }
 
     if intent == "get_last_record":
         if isinstance(result, dict) and "date" in result:
@@ -190,8 +249,10 @@ def build_clinic_agent() -> Any:
 clinic_agent = build_clinic_agent()
 
 
-async def run_clinic_agent(message: str, token: str, claims: dict[str, Any]) -> str:
+async def run_clinic_agent(message: str, token: str, claims: dict[str, Any] | None = None) -> str:
     """Run the LangGraph agent for an authenticated user message."""
+    if claims is None:
+        claims = verify_token(token)
     initial_state: AgentState = {
         "message": message,
         "token": token,
