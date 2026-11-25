@@ -7,6 +7,7 @@ and forwards verified tokens to the LangGraph agent for domain tool execution.
 from __future__ import annotations
 
 import os
+import secrets
 import urllib.parse
 from typing import Any
 
@@ -40,10 +41,11 @@ def health() -> dict[str, str]:
 
 
 @app.get("/auth/login")
-def auth_login() -> RedirectResponse:
+def auth_login(state: str | None = None) -> RedirectResponse:
     """Redirect user to Google OAuth 2.0 authorization code flow."""
     client_id = os.environ.get("GOOGLE_CLIENT_ID", "mock-client-id")
     redirect_uri = os.environ.get("GOOGLE_REDIRECT_URI", "http://localhost:8000/auth/callback")
+    oauth_state = state or secrets.token_urlsafe(16)
 
     params = {
         "client_id": client_id,
@@ -52,14 +54,16 @@ def auth_login() -> RedirectResponse:
         "scope": "openid email profile",
         "access_type": "offline",
         "prompt": "consent",
+        "state": oauth_state,
     }
     url = f"{GOOGLE_AUTH_URL}?{urllib.parse.urlencode(params)}"
     return RedirectResponse(url=url)
 
 
 @app.get("/auth/callback")
-async def auth_callback(
+def auth_callback(
     code: str = Query(..., description="Google OAuth authorization code"),
+    state: str | None = Query(default=None, description="OAuth state CSRF token"),
 ) -> dict[str, Any]:
     """Exchange OAuth authorization code for Google userinfo and mint clinic JWT."""
     client_id = os.environ.get("GOOGLE_CLIENT_ID", "")
@@ -77,14 +81,19 @@ async def auth_callback(
         sub = f"google-sub-{code.replace('test-code-', '')}"
         email = f"patient-{sub}@example.com"
     else:
+        if not state:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Missing OAuth state parameter (CSRF protection)",
+            )
         if not client_id or not client_secret:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Google OAuth credentials not configured",
             )
         try:
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                token_resp = await client.post(
+            with httpx.Client(timeout=10.0) as client:
+                token_resp = client.post(
                     GOOGLE_TOKEN_URL,
                     data={
                         "code": code,
@@ -102,7 +111,7 @@ async def auth_callback(
                 tokens = token_resp.json()
                 access_token = tokens.get("access_token")
 
-                userinfo_resp = await client.get(
+                userinfo_resp = client.get(
                     GOOGLE_USERINFO_URL,
                     headers={"Authorization": f"Bearer {access_token}"},
                 )
@@ -130,7 +139,7 @@ async def auth_callback(
 
 
 @app.post("/chat", response_model=ChatResponse)
-async def chat(
+def chat(
     payload: ChatRequest,
     authorization: str | None = Header(default=None),
 ) -> ChatResponse:
@@ -146,7 +155,7 @@ async def chat(
             status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired token"
         )
 
-    reply = await run_clinic_agent(
+    reply = run_clinic_agent(
         message=payload.message,
         token=authorization,
         claims=claims,

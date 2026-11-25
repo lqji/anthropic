@@ -66,11 +66,21 @@ async def test_auth_callback_rejects_test_code_when_disabled(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_auth_callback_fails_when_state_missing_in_prod(monkeypatch):
+    monkeypatch.setenv("TEST_AUTH_ENABLED", "false")
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get("/auth/callback?code=regular-google-code")
+        assert resp.status_code == 400
+        assert "state" in resp.json()["detail"].lower()
+
+
+@pytest.mark.asyncio
 async def test_auth_callback_fails_when_unconfigured_in_prod(monkeypatch):
     monkeypatch.setenv("TEST_AUTH_ENABLED", "false")
     monkeypatch.delenv("GOOGLE_CLIENT_SECRET", raising=False)
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
-        resp = await client.get("/auth/callback?code=regular-google-code")
+        resp = await client.get("/auth/callback?code=regular-google-code&state=valid-state-123")
         assert resp.status_code == 500
         assert "not configured" in resp.json()["detail"].lower()

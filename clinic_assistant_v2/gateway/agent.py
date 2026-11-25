@@ -249,7 +249,7 @@ def build_clinic_agent() -> Any:
 clinic_agent = build_clinic_agent()
 
 
-async def run_clinic_agent(message: str, token: str, claims: dict[str, Any] | None = None) -> str:
+def run_clinic_agent(message: str, token: str, claims: dict[str, Any] | None = None) -> str:
     """Run the LangGraph agent for an authenticated user message."""
     if claims is None:
         claims = verify_token(token)
@@ -261,5 +261,5 @@ async def run_clinic_agent(message: str, token: str, claims: dict[str, Any] | No
         "tool_result": None,
         "reply": "",
     }
-    final_state = await clinic_agent.ainvoke(initial_state)
+    final_state = clinic_agent.invoke(initial_state)
     return final_state["reply"]
